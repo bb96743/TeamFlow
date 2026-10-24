@@ -3,6 +3,29 @@ spring:
     name: teamflow-server
   profiles:
     active: dev
+  # ==================== G-4 数据库迁移（Flyway，2026-10-25 纳管） ====================
+  # 脚本来源：teamflow-system/sql/V*.sql 是唯一数据源；构建时由 teamflow-server/pom.xml 的
+  #   resources 配置复制到 classpath:db/migration，应用启动即自动迁移（可执行 JAR 内自带脚本）。
+  # 已纳管版本：V1 建表（17 张 sys_/gen_ 表）、V2 种子数据、V3 okr_ 5 表、V4 okr 权限码。
+  #   新增 DDL 一律追加 V5、V6…；禁止修改已发布的 V*.sql（M01 RULE R4）。
+  #
+  # baseline-on-migrate + baseline-version=2 的含义（Flyway 11.14.1 实测结论）：
+  #   · 【全新空库】Flyway 判定 schema 为空 → baseline 被跳过，从 V1 全量执行
+  #     （日志：All configured schemas are empty; baseline operation skipped）；
+  #   · 【既有库（已有 22 张表、无 flyway_schema_history）】→ 自动建 history 并以 V1+V2 为
+  #     baseline，只补跑 V3/V4（两脚本为 CREATE TABLE IF NOT EXISTS / INSERT IGNORE，可重复执行）；
+  #   · 【危险】绝不能在空库上手工执行 flyway:baseline —— 会让 V1/V2 被跳过、17 张表缺失，
+  #     V4 还会因 sys_menu 不存在而失败（2026-10-25 已实测复现）。baseline 只用于既有库。
+  # 两条安全路径、判别方法与标准命令见 docs/项目技术栈与启动指南.md §4.3。
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 2
+    baseline-description: "V1 init schema + V2 seed data (existing database baseline)"
+    validate-on-migrate: true
+    out-of-order: false
+    clean-disabled: true
 
 server:
   port: 8080

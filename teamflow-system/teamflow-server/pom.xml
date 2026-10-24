@@ -30,6 +30,19 @@
             <artifactId>teamflow-generator</artifactId>
         </dependency>
 
+        <!-- G-4 数据库迁移：Flyway 由应用启动自动执行。
+             Boot 4 把自动配置拆成独立模块 spring-boot-flyway，必须通过 starter 引入；
+             版本由 Boot 4.0.8 BOM 管理（flyway.version=11.14.1）。
+             flyway-mysql 提供 MySQL 方言（Flyway 10+ 必须单独引入，否则报 "No database support"）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
         <!-- 接口文档属于服务端运行时能力，随启动模块装配 -->
         <dependency>
             <groupId>com.baizhukui</groupId>
@@ -56,6 +69,23 @@
     </dependencies>
 
     <build>
+        <!-- G-4：迁移脚本的单一数据源仍是 teamflow-system/sql/（DbInit 与 flyway-maven-plugin 都读它）；
+             构建时把 V*.sql 复制进 classpath:db/migration，供应用启动时 Flyway 自动迁移、
+             并让可执行 JAR 自带脚本。注意：不要在两处维护脚本，否则会出现同名版本冲突
+             （Flyway 报 "Found more than one migration with version ..."）。 -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}/../sql</directory>
+                <targetPath>db/migration</targetPath>
+                <includes>
+                    <include>V*.sql</include>
+                </includes>
+                <filtering>false</filtering>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
@@ -63,6 +93,32 @@
                 <configuration>
                     <mainClass>com.teamflow.server.TeamFlowApplication</mainClass>
                 </configuration>
+            </plugin>
+            <!-- G-4 标准迁移命令（不启动应用，开发/运维手工执行）：
+                 cd teamflow-system
+                 mvn -pl teamflow-server flyway:migrate ^
+                     -Dflyway.url="jdbc:mysql://localhost:3306/teamflow?useSSL=false&allowPublicKeyRetrieval=true" ^
+                     -Dflyway.user=root -Dflyway.password=<DB_PASSWORD> ^
+                     -Dflyway.locations=filesystem:sql
+                 locations 显式指向 teamflow-system/sql（Maven 工作目录=teamflow-system），
+                 避免依赖 target/classes 的资源复制结果；baseline 等策略见 application.yml 注释与
+                 docs/项目技术栈与启动指南.md §4.3。 -->
+            <plugin>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-maven-plugin</artifactId>
+                <version>${flyway.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.flywaydb</groupId>
+                        <artifactId>flyway-mysql</artifactId>
+                        <version>${flyway.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>com.mysql</groupId>
+                        <artifactId>mysql-connector-j</artifactId>
+                        <version>${mysql.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
         </plugins>
     </build>
