@@ -93,6 +93,37 @@ class DataScopeApiTest {
         assertThat(export.getBody()).doesNotContain("scope_self_peer_" + suffix);
     }
 
+    /**
+     * G-2 回归：权限关系图的用户节点同样受数据范围约束（SELF 只能看到自己），
+     * 与 {@code /api/system/users}、{@code /api/system/users/export} 口径一致。
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void permissionGraphKeepsDataScopeForSelfOnlyUser() {
+        String suffix = String.valueOf(System.nanoTime());
+        Long roleId = insertRole("scope_graph_" + suffix, "SELF");
+        // 关系图端点需要 system:role:list（menu 102），用户列表需要 system:user:list（menu 101 已由 insertRole 授予）
+        jdbcTemplate.update("INSERT INTO sys_role_menu (role_id, menu_id) VALUES (?, 102)", roleId);
+        insertUser("scope_graph_owner_" + suffix, "关系图用户", 6L, roleId);
+        insertUser("scope_graph_peer_" + suffix, "同部门用户", 6L, null);
+
+        HttpHeaders headers = bearerHeaders(login("scope_graph_owner_" + suffix, "admin123"));
+
+        ResponseEntity<Map<String, Object>> graph = restTemplate.exchange(
+                "/api/system/permissions/graph",
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                MAP_TYPE
+        );
+
+        assertThat(graph.getStatusCode()).isEqualTo(HttpStatus.OK);
+        Map<String, Object> data = dataOf(graph.getBody());
+        assertThat(data).containsEntry("usersVisible", true);
+        List<Map<String, Object>> users = (List<Map<String, Object>>) data.get("users");
+        assertThat(users).extracting(row -> row.get("username"))
+                .containsExactly("scope_graph_owner_" + suffix);
+    }
+
     @Test
     void deptAndChildDataScopeIncludesCurrentDeptAndChildren() {
         String suffix = String.valueOf(System.nanoTime());

@@ -108,9 +108,14 @@ public class OkrObjectiveService extends OkrServiceSupport {
     }
 
     /**
-     * 按当前数据范围读取目标（不抛异常）；调用方需已处于 {@code @DataScope} 上下文中，
-     * 不能自行再加注解，否则嵌套切面会提前清理外层数据范围上下文。
+     * 按当前数据范围读取目标（不抛异常）。
+     *
+     * <p>本方法显式标注 {@code @DataScope}（G-2 默认拒绝后由 {@code DataScopeGuardTest} 强制）：
+     * 类内自调用（如 {@link #detail(Long)}）不经过代理，直接复用外层已建立的数据范围；
+     * 跨 Bean 调用（如 KR / 对齐服务）经过代理时由切面按当前用户自行解析范围。
+     * 切面已改为「保存—恢复」语义，嵌套调用不会提前清理外层上下文。</p>
      */
+    @DataScope
     public Map<String, Object> visibleObjective(Long id) {
         if (id == null) {
             return null;
