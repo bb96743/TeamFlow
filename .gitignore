@@ -1,0 +1,46 @@
+# ---- 项目内部文档与原型（本地维护，不入公开仓库）----
+# 与远程仓库既定约定一致：docs/ 含需求计划与实施细节，demo/ 为本地原型，
+# 两者只留本机，不随仓库分发。文件仍在磁盘上，不受影响。
+/docs/
+/demo/
+
+# ---- 构建产物 ----
+target/
+dist/
+build/
+*.class
+*.jar
+*.war
+
+# ---- 依赖与缓存 ----
+node_modules/
+.npm-cache/
+.pnpm-store/
+*.log
+npm-debug.log*
+
+# ---- IDE / 系统 ----
+.idea/
+.vscode/
+*.iml
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 本地环境与机密 ----
+# 严禁提交：密钥、口令、本地配置覆盖
+.env
+.env.*
+application-local.yml
+application-prod.yml
+*.pem
+*.key
+*.p12
+*.jks
+.credentials*
+
+# ---- 临时 ----
+*.tmp
+*.bak
+~$*

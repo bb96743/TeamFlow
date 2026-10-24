@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.teamflow</groupId>
+        <artifactId>teamflow-system-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>teamflow-server</artifactId>
+    <name>teamflow-server</name>
+    <description>服务装配模块：应用入口、运行时配置、接口文档、可执行包，后续所有服务端能力（调度、集成、开放接口）统一在此承载</description>
+
+    <dependencies>
+        <!-- 管理端能力切片（健康检查、数据库初始化工具） -->
+        <dependency>
+            <groupId>com.teamflow</groupId>
+            <artifactId>teamflow-admin</artifactId>
+        </dependency>
+        <!-- 业务能力切片：装配时必须显式引入，不能依赖传递 -->
+        <dependency>
+            <groupId>com.teamflow</groupId>
+            <artifactId>teamflow-system</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.teamflow</groupId>
+            <artifactId>teamflow-generator</artifactId>
+        </dependency>
+
+        <!-- 接口文档属于服务端运行时能力，随启动模块装配 -->
+        <dependency>
+            <groupId>com.baizhukui</groupId>
+            <artifactId>knife4j-openapi3-boot4-spring-boot-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Boot 4：TestRestTemplate 换包，且 RANDOM_PORT 不再自动提供该 Bean，
+             需 AutoConfigureTestRestTemplate；它依赖 RestTemplateBuilder，故 restclient 一并引入 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-resttestclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-restclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.teamflow.server.TeamFlowApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

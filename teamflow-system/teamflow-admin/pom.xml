@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.teamflow</groupId>
+        <artifactId>teamflow-system-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>teamflow-admin</artifactId>
+    <name>teamflow-admin</name>
+    <description>管理端能力切片：健康检查端点、数据库初始化工具。启动装配、运行时配置与可执行包由 teamflow-server 承担</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.teamflow</groupId>
+            <artifactId>teamflow-framework</artifactId>
+        </dependency>
+        <!-- 业务能力切片；同时以 runtime 作用域提供 DbInit 所需的 MySQL 驱动 -->
+        <dependency>
+            <groupId>com.teamflow</groupId>
+            <artifactId>teamflow-system</artifactId>
+        </dependency>
+    </dependencies>
+</project>
