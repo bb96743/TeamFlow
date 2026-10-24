@@ -36,7 +36,7 @@ npm run build
 
 退出和 401 均通过统一会话清理撤销动态路由与缓存；不得在页面直接修改认证存储或路由就绪标记。旧请求只能更新发起时仍有效的会话。
 
-主题、密度和减少动效规则见 [前端设计规范](../docs/前端设计规范.md)，前后端链路见 [PROJECT_MAP.md](../PROJECT_MAP.md)。
+主题、密度和减少动效规则见 [设计规范](../DESIGN.md)，前后端链路见 `PROJECT_MAP.md`（内部文档，暂未提供）。
 
 ## 浏览器回归
 
@@ -50,4 +50,4 @@ python3 scripts/session-regression.py
 
 历史原型和工作流页面已移除；历史改动见根目录更新日志。
 
-本项目代码采用 [MIT License](../LICENSE)；GSAP 依赖遵循其 [Standard "No Charge" License](https://gsap.com/community/standard-license/)。
+本项目代码采用 **MIT License**（见 `../teamflow-system/pom.xml` 与 `package.json` 的 license 声明）；GSAP 依赖遵循其 [Standard "No Charge" License](https://gsap.com/community/standard-license/)。
