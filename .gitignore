@@ -50,3 +50,6 @@ application-prod.yml
 #   start-all.bat / stop-all.bat / .env.local（密钥与数据库口令）/ _run/（日志）
 # 这些内容与本机环境绑定（如 Redis 安装路径），只留本机，不随仓库分发。
 /dev-local/
+
+# ---- Redis 本地落盘（从项目目录启动时会在 cwd 生成）----
+dump.rdb

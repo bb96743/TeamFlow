@@ -13,6 +13,11 @@ from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright, expect
 
+# 超级管理员可见的侧栏入口数（= sys_menu 中 menu_type='menu' 且 visible 的页面数）。
+# 菜单骨架补齐（2026-10-25，CR-20261025-05）后为 57：既有 15 + 新增 42。
+# 维护约定：每次增删页面级菜单，同步更新此常量；它用于发现"管理员菜单丢失"这类回归。
+EXPECTED_ADMIN_NAV_ITEMS = 57
+
 
 async def sign_in(page, username, password, destination=None):
     await page.wait_for_url("**/login**")
@@ -153,7 +158,7 @@ async def main(base_url):
             release_logout.set()
             await page.wait_for_load_state("networkidle")
             assert page.url.endswith("/dashboard"), "旧请求清除了新登录态"
-            assert await page.locator(".nav-item").count() == 11, "管理员菜单不完整"
+            assert await page.locator(".nav-item").count() == EXPECTED_ADMIN_NAV_ITEMS, "管理员菜单不完整"
             await page.unroute("**/api/health")
             await page.unroute("**/api/auth/logout")
             await sign_out(page)

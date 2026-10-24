@@ -3,6 +3,7 @@ import type { RouteRecordRaw } from 'vue-router'
 import { ApiError, authApi, authSession, type CurrentUser, type LoginRequest, type RouteItem } from '@/api'
 import { setPermissions } from '@/directives/permission'
 import type { NavGroup, NavLeaf } from '@/data'
+import { PLANNED_BY_MENU_COMPONENT } from '@/views/placeholder/catalog'
 import { clearDictCache } from './dict'
 import { clearDeptCache } from './dept'
 
@@ -49,6 +50,25 @@ const COMPONENT_MAP: Record<string, () => Promise<{ default: Component }>> = {
   'tool/gen/index': () => import('@/views/tool/Generator.vue'),
 }
 
+/** 菜单骨架占位页：component 以 placeholder/ 开头的菜单统一落到这张页面 */
+const PLACEHOLDER_PREFIX = 'placeholder/'
+const placeholderView = () => import('@/views/Placeholder.vue')
+
+/**
+ * sys_menu.component → 页面组件。
+ * 未登记且不属于计划页面的 component 返回 undefined，该菜单不渲染（与既有行为一致）：
+ * 避免把写错的组件路径静默渲染成空页面。
+ */
+export function resolveComponent(component?: string | null) {
+  if (!component) return undefined
+  const registered = COMPONENT_MAP[component]
+  if (registered) return registered
+  if (component.startsWith(PLACEHOLDER_PREFIX)) return placeholderView
+  // 已入库但前端页面尚未交付的菜单（如 M02 目标与 OKR 四页）同样走占位页
+  if (PLANNED_BY_MENU_COMPONENT[component]) return placeholderView
+  return undefined
+}
+
 /** 路由名由路径推导：/system/user → system-user */
 export function routeNameOf(path: string) {
   return path.replace(/^\/+|\/+$/g, '').replace(/\//g, '-') || 'home'
@@ -61,7 +81,7 @@ function normalizePath(path?: string) {
 
 function leafOf(item: RouteItem): NavLeaf | null {
   const path = normalizePath(item.path)
-  if (!path || !item.component || !COMPONENT_MAP[item.component]) return null
+  if (!path || !resolveComponent(item.component)) return null
   return { key: routeNameOf(path), label: item.name, icon: item.icon || 'file', path }
 }
 
@@ -87,12 +107,17 @@ function buildRoutes(groups: NavGroup[], tree: RouteItem[]): RouteRecordRaw[] {
     walk(node.children ?? [])
   })
   walk(tree)
-  return groups.flatMap(group => group.items.map(item => ({
-    path: item.path.replace(/^\//, ''),
-    name: item.key,
-    component: COMPONENT_MAP[componentByPath.get(item.path) ?? ''],
-    meta: { title: item.label, group: group.single ? undefined : group.label },
-  })))
+  return groups.flatMap(group => group.items.flatMap(item => {
+    const component = resolveComponent(componentByPath.get(item.path))
+    if (!component) return []
+    const route: RouteRecordRaw = {
+      path: item.path.replace(/^\//, ''),
+      name: item.key,
+      component,
+      meta: { title: item.label, group: group.single ? undefined : group.label },
+    }
+    return [route]
+  }))
 }
 
 export async function loadRoutes() {

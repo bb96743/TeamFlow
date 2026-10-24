@@ -20,6 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,6 +70,19 @@ class OkrTaskEventFlowTest {
     /** 本用例创建的 KR，用于事后清理事件派生数据（投影表与事件日志可重放重建，测试后清掉避免污染）。 */
     private final List<Long> createdKrIds = new ArrayList<>();
 
+    /**
+     * 任务 ID 生成器。
+     *
+     * <p>不能用 {@code System.nanoTime()}：Windows 上该时钟分辨率较粗，同一毫秒内的连续取值会相同，
+     * 导致同一 KR 的两次发布落到同一投影行（唯一键 kr_id + task_id 冲突），表现为偶发红。
+     * 这里用单调递增序列保证唯一，起点的数量级仍保持为"大整数"，避免与真实自增 ID 冲突。
+     */
+    private static final AtomicLong TASK_ID_SEQ = new AtomicLong(System.currentTimeMillis() * 1_000L);
+
+    private static long nextTaskId() {
+        return TASK_ID_SEQ.incrementAndGet();
+    }
+
     private TransactionTemplate transactionTemplate() {
         return new TransactionTemplate(transactionManager);
     }
@@ -99,7 +113,7 @@ class OkrTaskEventFlowTest {
         assertThat(intOf(initial, "taskCount")).isZero();
         assertThat(initial).containsEntry("taskLinkStatus", "unlinked");
 
-        Long taskA = System.nanoTime();
+        Long taskA = nextTaskId();
         publishInTransaction(TaskStatusChangedEvent.of(taskA, krId, taskA, true, "todo", "done", 1L));
 
         Map<String, Object> afterFirst = krData(headers, objectiveId, krId);
@@ -116,7 +130,7 @@ class OkrTaskEventFlowTest {
         assertThat(logs.get(0)).containsEntry("progressSource", "task_writeback");
         assertThat(String.valueOf(logs.get(0).get("reason"))).contains("eventId=");
 
-        Long taskB = System.nanoTime();
+        Long taskB = nextTaskId();
         publishInTransaction(TaskStatusChangedEvent.of(taskB, krId, taskB, true, "todo", "in_progress", 1L));
 
         Map<String, Object> afterSecond = krData(headers, objectiveId, krId);
@@ -139,7 +153,7 @@ class OkrTaskEventFlowTest {
         Long krId = createTaskDrivenKr(headers, objectiveId, "幂等KR" + suffix);
         createdKrIds.add(krId);
 
-        Long taskId = System.nanoTime();
+        Long taskId = nextTaskId();
         TaskStatusChangedEvent event = TaskStatusChangedEvent.of(taskId, krId, taskId, true, "todo", "done", 1L);
         publishInTransaction(event);
 
@@ -174,8 +188,8 @@ class OkrTaskEventFlowTest {
         Long krId = createTaskDrivenKr(headers, objectiveId, "子任务KR" + suffix);
         createdKrIds.add(krId);
 
-        Long rootDone = System.nanoTime();
-        Long rootOpen = System.nanoTime();
+        Long rootDone = nextTaskId();
+        Long rootOpen = nextTaskId();
         publishInTransaction(TaskStatusChangedEvent.of(rootDone, krId, rootDone, true, "todo", "done", 1L));
         publishInTransaction(TaskStatusChangedEvent.of(rootOpen, krId, rootOpen, true, "todo", "in_progress", 1L));
 
@@ -185,7 +199,7 @@ class OkrTaskEventFlowTest {
         assertThat(decimalOf(baseline, "progress")).isEqualTo(50.0);
 
         // 子任务完成：只入投影，不进入分子/分母
-        Long childTask = System.nanoTime();
+        Long childTask = nextTaskId();
         publishInTransaction(TaskStatusChangedEvent.of(childTask, krId, rootDone, false, "todo", "done", 1L));
 
         Map<String, Object> afterChild = krData(headers, objectiveId, krId);
@@ -214,7 +228,7 @@ class OkrTaskEventFlowTest {
         int linksBefore = linkCount(krId);
         int logsBefore = progressLogs(headers, objectiveId, krId).size();
 
-        Long taskId = System.nanoTime();
+        Long taskId = nextTaskId();
         TaskStatusChangedEvent event = TaskStatusChangedEvent.of(taskId, krId, taskId, true, "todo", "done", 1L);
 
         // 模拟 M03 在事务内发布事件后业务失败回滚
@@ -363,7 +377,7 @@ class OkrTaskEventFlowTest {
     }
 
     private String uniqueSuffix() {
-        return String.valueOf(System.nanoTime());
+        return String.valueOf(nextTaskId());
     }
 
     private ResponseEntity<Map<String, Object>> get(HttpHeaders headers, String url) {
