@@ -1,0 +1,31 @@
+# ============================================================
+# 汇流 TeamFlow · 换行符与文件类型规范
+# 目的：避免 Windows 与 Linux/CI 之间因换行符差异产生整文件 diff，
+#       并保证 .bat / .ps1 在克隆后仍是 CRLF（否则批处理标签与 pause 会失效）。
+# ============================================================
+
+# 文本一律以 LF 入库与检出，保证跨平台 diff 稳定
+* text=auto eol=lf
+
+# Windows 专用脚本必须保留 CRLF，否则 cmd 解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件不做换行转换、不做文本 diff
+*.jar   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.pdf   binary
+*.zip   binary
+
+# 第三方依赖锁文件：不参与语言统计，避免仓库语言占比失真
+teamflow-vue/package-lock.json linguist-generated=true
