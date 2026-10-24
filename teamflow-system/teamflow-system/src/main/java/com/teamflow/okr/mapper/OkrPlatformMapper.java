@@ -33,4 +33,13 @@ public interface OkrPlatformMapper {
             LIMIT 1
             """)
     Long selectUserIdByUsername(@Param("username") String username);
+
+    /** G-3：事件消费时把事件里的 operatorId 还原为账号名，用于进度留痕（只读引用 sys_user）。 */
+    @Select("""
+            SELECT username
+            FROM sys_user
+            WHERE id = #{userId} AND deleted = 0
+            LIMIT 1
+            """)
+    String selectUsernameById(@Param("userId") Long userId);
 }

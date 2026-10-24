@@ -290,12 +290,26 @@ public class OkrKeyResultService extends OkrServiceSupport {
     }
 
     /**
-     * 任务驱动型 KR 的事件回写入口（M02 RULE R3 幂等由事件侧 {@code (taskId, krId)} 去重保证）。
+     * 任务驱动型 KR 的事件回写入口（M02 RULE R3）。
      *
-     * <p><b>本期不开放 HTTP</b>：G-3 领域事件能力未完成，待 M03 发布任务完成事件后由监听器调用。</p>
+     * <p><b>G-3 起由 {@code OkrTaskEventSubscriber} 在 M03 事件消费时调用</b>：订阅端按派生投影
+     * {@code okr_kr_task_link} 统计"顶层任务总数 / 已完成顶层数"后传入。保留本三参重载供内部与测试直接调用，
+     * 操作人取当前登录用户。</p>
      */
     @Transactional
     public void applyTaskWriteback(Long krId, int doneTaskCount, int taskCount) {
+        applyTaskWriteback(krId, doneTaskCount, taskCount, currentUsername(), "任务完成度回写（M03 事件）");
+    }
+
+    /**
+     * G-3 事件回写：操作人与原因由事件消费端传入。
+     *
+     * <p>{@code @TransactionalEventListener(AFTER_COMMIT)} 回调不保证仍持有登录上下文，因此
+     * <b>不能依赖 {@code currentUsername()}</b>；操作人由事件里的 {@code operatorId} 还原
+     * （取不到时用 {@code m03:event}）。进度按 D-2026-10-25-03 计算，并写 {@code okr_progress_log}。</p>
+     */
+    @Transactional
+    public void applyTaskWriteback(Long krId, int doneTaskCount, int taskCount, String operator, String reason) {
         Map<String, Object> existing = keyResultMapper.selectKeyResultById(krId);
         if (existing == null) {
             throw new BusinessException("关键结果不存在");
@@ -306,14 +320,15 @@ public class OkrKeyResultService extends OkrServiceSupport {
         if (taskCount < 0 || doneTaskCount < 0 || doneTaskCount > taskCount) {
             throw new BusinessException("已完成任务数必须在 0 到关联任务总数之间");
         }
+        String effectiveOperator = operator == null || operator.isBlank() ? "system" : operator;
         Long objectiveId = numberAsLong(existing.get("objectiveId"));
         Map<String, Object> objective = objectiveService.requireObjective(objectiveId);
         periodService.requireEditable(numberAsLong(objective.get("periodId")));
         BigDecimal progress = computeTaskDriven(doneTaskCount, taskCount);
         String taskLinkStatus = taskCount > 0 ? "linked" : "unlinked";
-        keyResultMapper.updateTaskWriteback(krId, taskCount, doneTaskCount, taskLinkStatus, progress, currentUsername());
+        keyResultMapper.updateTaskWriteback(krId, taskCount, doneTaskCount, taskLinkStatus, progress, effectiveOperator);
         writeProgressLog(objectiveId, krId, numberAsBigDecimal(existing.get("progress")), progress,
-                "task_writeback", "任务完成度回写（M03 事件，待接入）");
+                "task_writeback", reason, effectiveOperator);
         objectiveService.refreshProgress(objectiveId);
     }
 
@@ -374,7 +389,14 @@ public class OkrKeyResultService extends OkrServiceSupport {
     private void writeProgressLog(
             Long objectiveId, Long krId, BigDecimal from, BigDecimal to, String progressSource, String reason
     ) {
-        String operator = currentUsername();
+        writeProgressLog(objectiveId, krId, from, to, progressSource, reason, currentUsername());
+    }
+
+    /** G-3：事件回写不走 SecurityContext，操作人显式传入（见 {@link #applyTaskWriteback(Long, int, int, String, String)}）。 */
+    private void writeProgressLog(
+            Long objectiveId, Long krId, BigDecimal from, BigDecimal to, String progressSource, String reason,
+            String operator
+    ) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("krId", krId);
         row.put("objectiveId", objectiveId);
