@@ -1,0 +1,117 @@
+name: CI
+
+# G-5 持续集成：后端 113 例 + 前端 21 例 + 前端构建。
+# 说明见 docs/change-requests/CR-20261026-09-engineering-CI流水线.md 与 docs/M1前置能力缺口工单.md G-5。
+# 密钥策略：本文件只使用「固定测试值」，不引用仓库 Secrets、不包含任何真实凭据（公开仓库）。
+# 关键前提：CI 首次启动时数据库为空 schema，Flyway 会跳过 baseline 并从 V1 全量迁移到 V12，
+#   自动建出 38 张表 + 种子账号（V2 使用 INSERT IGNORE），因此无需手工初始化脚本。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Java 21 + Maven)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          # 仅用于本次 CI 一次性容器，不是真实环境凭据（公开仓库安全策略允许固定测试值）
+          MYSQL_ROOT_PASSWORD: ci_test_root_password
+          MYSQL_DATABASE: teamflow
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci_test_root_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+          --health-start-period=30s
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      # 固定 64 位十六进制测试密钥（JWT 要求 UTF-8 至少 32 字节）；不是真实密钥
+      JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: teamflow
+      DB_USERNAME: root
+      DB_PASSWORD: ci_test_root_password
+      DB_TIMEZONE: "+08:00"
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: "6379"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run backend tests (Flyway bootstraps the empty database)
+        working-directory: teamflow-system
+        run: mvn -B -pl teamflow-server -am test
+
+      - name: Upload surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-surefire-reports
+          path: teamflow-system/**/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  frontend:
+    name: Frontend (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: teamflow-vue
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: teamflow-vue/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend unit tests
+        run: npm run test:unit
+
+      - name: Build frontend (vue-tsc + vite)
+        run: npm run build
+
+      - name: Upload frontend build output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-output
+          path: teamflow-vue/dist/
+          if-no-files-found: ignore
+          retention-days: 7
