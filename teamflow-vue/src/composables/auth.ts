@@ -4,6 +4,7 @@ import { ApiError, authApi, authSession, type CurrentUser, type LoginRequest, ty
 import { setPermissions } from '@/directives/permission'
 import type { NavGroup, NavLeaf } from '@/data'
 import { PLANNED_BY_MENU_COMPONENT } from '@/views/placeholder/catalog'
+import { moduleComponentMap } from '@/views/registry'
 import { clearDictCache } from './dict'
 import { clearDeptCache } from './dept'
 
@@ -48,6 +49,8 @@ const COMPONENT_MAP: Record<string, () => Promise<{ default: Component }>> = {
   'monitor/operlog/index': () => import('@/views/monitor/OperLog.vue'),
   'monitor/loginlog/index': () => import('@/views/monitor/LoginLog.vue'),
   'tool/gen/index': () => import('@/views/tool/Generator.vue'),
+  // 业务模块页面由各模块注册表提供（按模块分文件，避免并发编辑冲突）
+  ...moduleComponentMap,
 }
 
 /** 菜单骨架占位页：component 以 placeholder/ 开头的菜单统一落到这张页面 */
@@ -58,11 +61,21 @@ const placeholderView = () => import('@/views/Placeholder.vue')
  * sys_menu.component → 页面组件。
  * 未登记且不属于计划页面的 component 返回 undefined，该菜单不渲染（与既有行为一致）：
  * 避免把写错的组件路径静默渲染成空页面。
+ *
+ * 业务模块页面允许「逐页交付」：V6 把菜单 component 统一写成
+ * `placeholder/<模块>/<页面>/index`，这里剥掉前缀后再查一次注册表——
+ *   · 已交付真实页面 → 用真实组件（无需改数据库）
+ *   · 尚未交付       → 落回 Placeholder.vue（规划中）
  */
 export function resolveComponent(component?: string | null) {
   if (!component) return undefined
   const registered = COMPONENT_MAP[component]
   if (registered) return registered
+  if (component.startsWith(PLACEHOLDER_PREFIX)) {
+    const delivered = COMPONENT_MAP[component.slice(PLACEHOLDER_PREFIX.length)]
+    if (delivered) return delivered
+    return placeholderView
+  }
   if (component.startsWith(PLACEHOLDER_PREFIX)) return placeholderView
   // 已入库但前端页面尚未交付的菜单（如 M02 目标与 OKR 四页）同样走占位页
   if (PLANNED_BY_MENU_COMPONENT[component]) return placeholderView
