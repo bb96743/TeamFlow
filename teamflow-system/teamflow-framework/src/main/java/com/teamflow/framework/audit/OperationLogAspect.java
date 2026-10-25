@@ -14,7 +14,9 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Aspect
@@ -70,7 +72,7 @@ public class OperationLogAspect {
 
     private String params(Object[] args) {
         try {
-            JsonNode root = objectMapper.valueToTree(args);
+            JsonNode root = objectMapper.valueToTree(sanitizeArgs(args));
             maskSensitiveFields(root);
             return objectMapper.writeValueAsString(root);
         } catch (JacksonException error) {
@@ -78,6 +80,27 @@ public class OperationLogAspect {
             // 审计日志绝不能因为参数序列化失败而影响主流程
             return "[]";
         }
+    }
+
+    /**
+     * G-1：文件上传参数不能整体序列化——{@link MultipartFile} 的 getter（如 getBytes）会把二进制读进内存，
+     * 既浪费资源也会把文件内容写进审计日志。这里只保留文件名/大小/类型摘要。
+     */
+    private Object[] sanitizeArgs(Object[] args) {
+        Object[] sanitized = new Object[args.length];
+        for (int i = 0; i < args.length; i++) {
+            Object arg = args[i];
+            if (arg instanceof MultipartFile file) {
+                Map<String, Object> summary = new LinkedHashMap<>();
+                summary.put("originalFilename", file.getOriginalFilename());
+                summary.put("size", file.getSize());
+                summary.put("contentType", file.getContentType());
+                sanitized[i] = summary;
+            } else {
+                sanitized[i] = arg;
+            }
+        }
+        return sanitized;
     }
 
     private void maskSensitiveFields(JsonNode node) {

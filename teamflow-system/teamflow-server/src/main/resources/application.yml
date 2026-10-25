@@ -3,6 +3,12 @@ spring:
     name: teamflow-server
   profiles:
     active: dev
+  # G-1 统一文件上传：容器层单文件/请求大小上限。与 teamflow.file.max-size 用同一环境变量，
+  # 避免"服务层放行、容器层先拒"的双口径（超限时由 GlobalExceptionHandler 转 400 明确提示）。
+  servlet:
+    multipart:
+      max-file-size: ${TEAMFLOW_FILE_MAX_SIZE:20MB}
+      max-request-size: ${TEAMFLOW_FILE_MAX_SIZE:20MB}
   # ==================== G-4 数据库迁移（Flyway，2026-10-25 纳管） ====================
   # 脚本来源：teamflow-system/sql/V*.sql 是唯一数据源；构建时由 teamflow-server/pom.xml 的
   #   resources 配置复制到 classpath:db/migration，应用启动即自动迁移（可执行 JAR 内自带脚本）。
@@ -29,12 +35,44 @@ spring:
 
 server:
   port: 8080
+  tomcat:
+    # G-1：请求体超限时，容器需要「吞掉」剩余请求体才能把明确的 400 响应发回客户端。
+    # Tomcat 默认 max-swallow-size=2MB，小于文件上限时超限请求会被直接断连（客户端只看到连接重置），
+    # 因此这里必须大于 spring.servlet.multipart.max-file-size（默认 20MB）。
+    max-swallow-size: ${TEAMFLOW_FILE_MAX_SWALLOW:30MB}
 
 teamflow:
   api-prefix: /api
   jwt:
     secret: "${JWT_SECRET}"
     expires-seconds: 7200
+  # G-1 统一文件上传（M00 平台能力，M03 附件 / M07 文档中心复用）
+  # storage-path：本地存储根目录（生产建议绝对路径；容器内需挂载持久卷）；
+  # max-size：单文件上限，默认 20MB（与 spring.servlet.multipart 同源，由 TEAMFLOW_FILE_MAX_SIZE 统一覆盖）；
+  # denied-extensions：危险可执行/脚本后缀黑名单（始终生效），allowed-extensions 非空时再叠加白名单。
+  file:
+    storage-path: ${TEAMFLOW_FILE_STORAGE_PATH:./data/uploads}
+    max-size: ${TEAMFLOW_FILE_MAX_SIZE:20MB}
+    denied-extensions:
+      - jsp
+      - jspx
+      - exe
+      - sh
+      - bat
+      - cmd
+      - dll
+      - com
+      - msi
+      - scr
+      - vbs
+      - js
+      - jar
+      - war
+      - class
+      - php
+      - asp
+      - aspx
+    allowed-extensions: []
 
 mybatis-plus:
   configuration:

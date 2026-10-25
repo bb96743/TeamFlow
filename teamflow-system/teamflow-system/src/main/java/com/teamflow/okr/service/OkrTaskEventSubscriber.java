@@ -54,7 +54,10 @@ import java.util.Map;
  *
  * <p><b>失败处理</b>：本监听器在独立事务（{@code REQUIRES_NEW}）中执行；消费异常记录 error 日志与
  * 事件日志（{@code process_result=failed}），**不向发布方抛出**（原业务事务已提交，不能回滚）。
- * 本期不做重试/Outbox，事件丢失的兜底留到 M4 前评估（D-05 回退条件）。</p>
+ * 本期不做重试/Outbox，事件丢失的兜底留到 M4 前评估。</p>
+ *
+ * <p><b>并发（L0 §9.1 {@code D-2026-10-25-06} D-06.4）</b>：重算前对受影响 {@code okr_key_result} 行加
+ * {@code SELECT ... FOR UPDATE} 悲观锁（按 KR ID 升序），使同一 KR 的事件消费串行，避免计数交错写。</p>
  */
 @Component
 public class OkrTaskEventSubscriber {
@@ -148,6 +151,9 @@ public class OkrTaskEventSubscriber {
         // 第一层幂等：event_id 唯一键；重复投递在此抛 DuplicateKeyException 并被上层捕获跳过
         insertEventLog(event, "received", null);
 
+        // D-06.4 并发串行化：重算前对 okr_key_result 行加悲观锁（同 KR 的事件消费排队）
+        lockKeyResults(List.of(event.krId()));
+
         // 第二层幂等：业务键 (kr_id, task_id) 唯一，状态覆盖
         eventMapper.upsertTaskLink(
                 event.krId(), event.taskId(), event.isRoot(), event.toStatus(), completedAt(event));
@@ -189,6 +195,9 @@ public class OkrTaskEventSubscriber {
                 event.isRoot(), null, event.taskStatus(), event.operatorId(), toLocalDateTime(event.occurredAt()),
                 "received", null);
 
+        // D-06.4：改挂会同时影响新旧两个 KR，按 KR ID 升序一次锁住，避免交叉等待形成死锁
+        lockKeyResults(java.util.Arrays.asList(event.fromKrId(), event.toKrId()));
+
         // ① 清理旧 KR 投影并重算旧 KR（否则旧 KR 进度永久虚高）
         if (event.fromKrId() != null) {
             eventMapper.deleteTaskLink(event.fromKrId(), event.taskId());
@@ -222,6 +231,8 @@ public class OkrTaskEventSubscriber {
 
         // 任务可能改挂过 KR，投影可能散落多行：按 taskId 全量清理后逐个重算受影响 KR
         List<Long> affectedKrIds = eventMapper.selectKrIdsByTaskId(event.taskId());
+        // D-06.4：删除同样会触发多个 KR 的重算，先按 KR ID 升序加锁
+        lockKeyResults(affectedKrIds);
         eventMapper.deleteTaskLinksByTaskId(event.taskId());
         for (Long krId : affectedKrIds) {
             recalculate(krId, event.operatorId(),
@@ -234,8 +245,7 @@ public class OkrTaskEventSubscriber {
     }
 
     /** 按投影表 COUNT 重算指定 KR 的任务驱动型进度（非任务驱动型 / KR 不存在时安全跳过）。 */
-    private void recalculate(Long krId, Long operatorId, String reason) {
-        Map<String, Object> keyResult = keyResultMapper.selectKeyResultById(krId);
+    private void recalculate(Long krId, Long operatorId, String reason) {        Map<String, Object> keyResult = keyResultMapper.selectKeyResultById(krId);
         if (keyResult == null) {
             log.info("KR 不存在或已删除，跳过重算：krId={}", krId);
             return;
@@ -247,6 +257,24 @@ public class OkrTaskEventSubscriber {
         int taskCount = eventMapper.countRootTasks(krId);
         int doneTaskCount = eventMapper.countDoneRootTasks(krId);
         keyResultService.applyTaskWriteback(krId, doneTaskCount, taskCount, resolveOperator(operatorId), reason);
+    }
+
+    /**
+     * D-06.4：重算前对受影响 KR 行加悲观锁（{@code SELECT ... FOR UPDATE}）。
+     *
+     * <p>按 KR ID **升序去重**后逐行加锁：只锁单行、固定顺序，不会因两个事件交叉（A→B 与 B→A）
+     * 形成等待环。锁在 {@code REQUIRES_NEW} 的消费事务内持有到提交，因此同一 KR 的事件消费天然串行，
+     * 避免「A 算出 1/2=50% 后覆盖 B 的 2/2=100%」的交错写。</p>
+     */
+    private void lockKeyResults(java.util.Collection<Long> krIds) {
+        if (krIds == null || krIds.isEmpty()) {
+            return;
+        }
+        krIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .sorted()
+                .forEach(keyResultMapper::lockKeyResultById);
     }
 
     private void insertEventLog(TaskStatusChangedEvent event, String processResult, String reason) {

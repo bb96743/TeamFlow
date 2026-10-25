@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +39,8 @@ public class OkrKeyResultService extends OkrServiceSupport {
     private static final Set<String> KR_TYPES = Set.of("quantitative", "task_driven");
     private static final Set<String> DIRECTIONS = Set.of("positive", "negative");
     private static final BigDecimal HUNDRED = new BigDecimal("100");
+    /** D-06.3：人工校准相对自动值的双向限幅（个百分点）。 */
+    private static final BigDecimal CALIBRATION_LIMIT = new BigDecimal("20");
     private static final int LOG_LIMIT = 100;
 
     private final OkrKeyResultMapper keyResultMapper;
@@ -263,6 +266,17 @@ public class OkrKeyResultService extends OkrServiceSupport {
                 throw new BusinessException("进度必须在 0 到 100 之间");
             }
             progress = scale2(progress);
+            // D-06.3：校准只允许在「自动值 ±20 个百分点」范围内；超限须领导者审批后走 M05 申诉流程
+            BigDecimal autoProgress = computeQuantitative(currentValue,
+                    numberAsBigDecimal(existing.get("targetValue")), String.valueOf(existing.get("direction")));
+            BigDecimal deviation = progress.subtract(autoProgress).abs();
+            if (deviation.compareTo(CALIBRATION_LIMIT) > 0) {
+                throw new BusinessException("人工校准超出 ±20 个百分点限额（D-06.3）：自动值为 "
+                        + autoProgress.toPlainString() + "%，本次校准为 " + progress.toPlainString()
+                        + "%，偏离 " + deviation.toPlainString() + " 个百分点；允许范围 "
+                        + autoProgress.subtract(CALIBRATION_LIMIT).max(BigDecimal.ZERO).toPlainString() + "%~"
+                        + autoProgress.add(CALIBRATION_LIMIT).min(HUNDRED).toPlainString() + "%");
+            }
             progressSource = "manual";
             reason = required(request.getReason(), "人工调整进度必须填写原因");
         } else {
@@ -287,6 +301,28 @@ public class OkrKeyResultService extends OkrServiceSupport {
             throw new BusinessException("关键结果不存在或无权访问");
         }
         return progressLogMapper.selectProgressLogs(krId, LOG_LIMIT);
+    }
+
+    /**
+     * M05 绩效归集的**只读取数出口**（跨模块只走 Service，禁止 M05 直连 {@code okr_*}）。
+     *
+     * <p><b>取数口径</b>：某员工承接（{@code owner_id}）的、目标所属 {@code okr_period} 与绩效周期
+     * {@code [startDate, endDate]} 区间重叠的 KR；同时带出最近一次人工校准的量与原因，
+     * 供 M05 下钻展示（L0 §9.1 {@code D-06.3}）。本方法不写库、不套数据范围（归集是管理端动作，
+     * 调用方负责权限）。</p>
+     *
+     * @param ownerId   KR 负责人（被评人）用户 ID
+     * @param startDate 绩效周期开始日期
+     * @param endDate   绩效周期结束日期
+     */
+    public List<Map<String, Object>> perfFacts(Long ownerId, LocalDate startDate, LocalDate endDate) {
+        if (ownerId == null) {
+            return List.of();
+        }
+        if (startDate == null || endDate == null) {
+            throw new BusinessException("归集取数必须提供绩效周期起止日期");
+        }
+        return keyResultMapper.selectPerfKrs(ownerId, startDate.toString(), endDate.toString());
     }
 
     /**

@@ -213,4 +213,63 @@ public interface OkrKeyResultMapper {
             WHERE id = #{id} AND deleted = 0
             """)
     int softDeleteKeyResult(@Param("id") Long id, @Param("operator") String operator);
+
+    // ------------------------------------------------------------------
+    // M05 归集取数（跨模块只走 Service：OkrKeyResultService#perfFacts 是本表唯一的对外读出口）
+    // ------------------------------------------------------------------
+
+    /**
+     * 归集取数：某员工在给定日期范围内承接的 KR 及其进度（M05 绩效归集用）。
+     *
+     * <p>取数范围：目标所属 {@code okr_period} 与绩效周期 {@code [startDate, endDate]} 日期区间重叠；
+     * 同时带出**最近一次人工校准**的量与原因（D-06.3：下钻必须展示校准量与原因）。</p>
+     */
+    @Select("""
+            SELECT k.id AS krId,
+                   k.objective_id AS objectiveId,
+                   o.objective_title AS objectiveTitle,
+                   o.period_id AS periodId,
+                   p.period_name AS periodName,
+                   k.kr_title AS krTitle,
+                   k.kr_type AS krType,
+                   k.progress,
+                   k.progress_source AS progressSource,
+                   k.task_count AS taskCount,
+                   k.done_task_count AS doneTaskCount,
+                   (SELECT l.from_progress FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationFrom,
+                   (SELECT l.to_progress FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationTo,
+                   (SELECT l.reason FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationReason,
+                   (SELECT l.operator_name FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationOperator,
+                   (SELECT DATE_FORMAT(l.create_time, '%Y-%m-%d %H:%i:%s') FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationTime
+            FROM okr_key_result k
+            JOIN okr_objective o ON o.id = k.objective_id AND o.deleted = 0
+            JOIN okr_period p ON p.id = o.period_id AND p.deleted = 0
+            WHERE k.deleted = 0
+              AND k.owner_id = #{ownerId}
+              AND p.start_date <= #{endDate}
+              AND p.end_date >= #{startDate}
+            ORDER BY k.objective_id, k.sort, k.id
+            """)
+    List<Map<String, Object>> selectPerfKrs(
+            @Param("ownerId") Long ownerId,
+            @Param("startDate") String startDate,
+            @Param("endDate") String endDate
+    );
+
+    /**
+     * 行级悲观锁（L0 §9.1 D-2026-10-25-06 D-06.4）：M02 事件订阅端在重算前锁住 KR 行，
+     * 使同一 KR 的并发事件消费串行化，避免 A(1/2=50%) 覆盖 B(2/2=100%) 的交错。
+     */
+    @Select("SELECT id FROM okr_key_result WHERE id = #{id} AND deleted = 0 FOR UPDATE")
+    Long lockKeyResultById(@Param("id") Long id);
 }
