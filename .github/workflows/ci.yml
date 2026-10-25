@@ -68,9 +68,38 @@ jobs:
           java-version: "21"
           cache: maven
 
+      # 加固：GitHub 的 mysql 镜像在初始化阶段会先起一个临时 mysqld（仅监听 socket），
+      # service 健康检查可能在此期间就通过，导致随后 Flyway 迁移连不上而偶发失败
+      # （实测：同一份代码一次 failure 81s、一次 success 98s）。
+      # 因此这里显式等待 TCP 3306 真正可查询，并额外给 5 秒缓冲。
+      - name: Wait for MySQL readiness
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -p"${{ env.DB_PASSWORD }}" --silent >/dev/null 2>&1; then
+              echo "MySQL 已响应 ping（第 ${i} 次尝试）"
+              break
+            fi
+            echo "等待 MySQL... (${i}/30)"
+            sleep 2
+          done
+          # ping 之后仍需确认能真正执行查询（临时实例阶段 ping 可能通过但查询不可用）
+          for i in $(seq 1 30); do
+            if mysql -h 127.0.0.1 -P 3306 -uroot -p"${{ env.DB_PASSWORD }}" -e "SELECT 1" >/dev/null 2>&1; then
+              echo "MySQL 可执行查询（第 ${i} 次尝试）"
+              sleep 5
+              exit 0
+            fi
+            echo "等待 MySQL 可查询... (${i}/30)"
+            sleep 2
+          done
+          echo "::error title=MySQL not ready::60 秒内 MySQL 仍不可查询，后续测试可能失败"
+          exit 1
+
       - name: Run backend tests (Flyway bootstraps the empty database)
         working-directory: teamflow-system
-        run: mvn -B -pl teamflow-server -am test
+        # connect-retries 让 Flyway 在容器刚就绪、偶发拒绝连接时自动重试而非直接失败
+        run: mvn -B -pl teamflow-server -am test -Dspring.flyway.connect-retries=10
 
       # 失败诊断：把失败测试摘要写成 ::error:: 注解，
       # 便于在没有仓库 admin 权限、无法下载 job log 时也能从 check-run annotations API 读到原因。
