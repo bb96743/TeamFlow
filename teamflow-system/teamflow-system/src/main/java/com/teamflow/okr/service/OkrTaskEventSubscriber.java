@@ -1,5 +1,7 @@
 package com.teamflow.okr.service;
 
+import com.teamflow.common.event.TaskDeletedEvent;
+import com.teamflow.common.event.TaskKrChangedEvent;
 import com.teamflow.common.event.TaskStatusChangedEvent;
 import com.teamflow.okr.mapper.OkrKeyResultMapper;
 import com.teamflow.okr.mapper.OkrPlatformMapper;
@@ -14,9 +16,11 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,6 +28,14 @@ import java.util.Map;
  *
  * <p><b>链路</b>：M03 在任务状态变更的事务内发布事件 → 本监听器在**事务提交后**
  * （{@link TransactionPhase#AFTER_COMMIT}）执行；事务回滚则不会被调用。</p>
+ *
+ * <p><b>本期补齐的两个 G-3 遗留事件</b>（M03 开工时按 G-3 交付说明一并补，堵脏数据路径）：</p>
+ * <ul>
+ *   <li>{@link TaskKrChangedEvent}：任务改挂 KR → 清理旧 KR 投影并重算旧 KR，再写新 KR 投影并重算新 KR；</li>
+ *   <li>{@link TaskDeletedEvent}：任务逻辑删除 → 按 taskId 清理其所有 KR 投影行并逐个重算。</li>
+ * </ul>
+ * 若无这两个消费，改挂/删除后 {@code okr_kr_task_link} 会残留旧关联，KR 进度永久虚高/偏低。
+ * 三个监听方法均只读写 M02 自有表，**不查 {@code task_*} 表**（D-2026-10-25-05）。
  *
  * <p><b>幂等（M02 RULE R3，双重去重）</b>：</p>
  * <ol>
@@ -86,6 +98,43 @@ public class OkrTaskEventSubscriber {
         }
     }
 
+    /**
+     * 消费任务改挂 KR 事件（补 G-3 遗留事件）：清理旧 KR 投影 → 重算旧 KR；写新 KR 投影 → 重算新 KR。
+     *
+     * <p>不消费本事件会导致任务从 KR-A 改挂到 KR-B 后，KR-A 的投影行永久残留、进度永久虚高——
+     * 这正是 G-3 交付时明确要求 M03 开工时一并补的脏数据路径。</p>
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onTaskKrChanged(TaskKrChangedEvent event) {
+        try {
+            handleKrChanged(event);
+        } catch (DuplicateKeyException duplicate) {
+            log.info("任务改挂事件重复投递，已按 eventId 幂等跳过：eventId={}", event.eventId());
+        } catch (RuntimeException exception) {
+            log.error("任务改挂事件处理失败：eventId={} taskId={} fromKrId={} toKrId={}",
+                    event.eventId(), event.taskId(), event.fromKrId(), event.toKrId(), exception);
+            markResultQuietly(event.eventId(), "failed", null, truncate(exception.getMessage()));
+        }
+    }
+
+    /**
+     * 消费任务删除事件（补 G-3 遗留事件）：按 taskId 清理其在**所有 KR** 上的投影行，并重算受影响的 KR。
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onTaskDeleted(TaskDeletedEvent event) {
+        try {
+            handleDeleted(event);
+        } catch (DuplicateKeyException duplicate) {
+            log.info("任务删除事件重复投递，已按 eventId 幂等跳过：eventId={}", event.eventId());
+        } catch (RuntimeException exception) {
+            log.error("任务删除事件处理失败：eventId={} taskId={} krId={}",
+                    event.eventId(), event.taskId(), event.krId(), exception);
+            markResultQuietly(event.eventId(), "failed", null, truncate(exception.getMessage()));
+        }
+    }
+
     private void handle(TaskStatusChangedEvent event) {
         if (event.taskId() == null) {
             insertEventLog(event, "skipped_no_kr", "事件缺少 taskId，忽略");
@@ -125,18 +174,103 @@ public class OkrTaskEventSubscriber {
                 event.krId(), doneTaskCount, taskCount, after == null ? null : after.get("progress"));
     }
 
+    // ------------------------------------------------------------------
+    // G-3 遗留事件：任务改挂 KR / 任务删除（投影清理，堵脏数据）
+    // ------------------------------------------------------------------
+
+    private void handleKrChanged(TaskKrChangedEvent event) {
+        if (event.taskId() == null) {
+            insertEventLog(event.eventId(), event.eventType(), null, event.toKrId(), event.rootTaskId(),
+                    event.isRoot(), null, event.taskStatus(), event.operatorId(), toLocalDateTime(event.occurredAt()),
+                    "skipped_no_kr", "事件缺少 taskId，忽略");
+            return;
+        }
+        insertEventLog(event.eventId(), event.eventType(), event.taskId(), event.toKrId(), event.rootTaskId(),
+                event.isRoot(), null, event.taskStatus(), event.operatorId(), toLocalDateTime(event.occurredAt()),
+                "received", null);
+
+        // ① 清理旧 KR 投影并重算旧 KR（否则旧 KR 进度永久虚高）
+        if (event.fromKrId() != null) {
+            eventMapper.deleteTaskLink(event.fromKrId(), event.taskId());
+            recalculate(event.fromKrId(), event.operatorId(),
+                    "任务改挂 KR 后重算旧 KR（taskId=" + event.taskId() + " 已脱离 krId=" + event.fromKrId()
+                            + "，eventId=" + event.eventId() + "）");
+        }
+        // ② 写入新 KR 投影并重算新 KR
+        if (event.toKrId() != null) {
+            eventMapper.upsertTaskLink(event.toKrId(), event.taskId(), event.isRoot(), event.taskStatus(),
+                    completedAt(event.taskStatus(), event.occurredAt()));
+            recalculate(event.toKrId(), event.operatorId(),
+                    "任务改挂 KR 后重算新 KR（taskId=" + event.taskId() + " 已挂到 krId=" + event.toKrId()
+                            + "，eventId=" + event.eventId() + "）");
+        }
+        markResult(event.eventId(), "applied", null,
+                "任务改挂 KR：fromKrId=" + event.fromKrId() + "，toKrId=" + event.toKrId());
+        log.info("任务改挂 KR 投影清理完成：taskId={} {}→{}", event.taskId(), event.fromKrId(), event.toKrId());
+    }
+
+    private void handleDeleted(TaskDeletedEvent event) {
+        if (event.taskId() == null) {
+            insertEventLog(event.eventId(), event.eventType(), null, event.krId(), event.rootTaskId(),
+                    event.isRoot(), null, null, event.operatorId(), toLocalDateTime(event.occurredAt()),
+                    "skipped_no_kr", "事件缺少 taskId，忽略");
+            return;
+        }
+        insertEventLog(event.eventId(), event.eventType(), event.taskId(), event.krId(), event.rootTaskId(),
+                event.isRoot(), null, null, event.operatorId(), toLocalDateTime(event.occurredAt()),
+                "received", null);
+
+        // 任务可能改挂过 KR，投影可能散落多行：按 taskId 全量清理后逐个重算受影响 KR
+        List<Long> affectedKrIds = eventMapper.selectKrIdsByTaskId(event.taskId());
+        eventMapper.deleteTaskLinksByTaskId(event.taskId());
+        for (Long krId : affectedKrIds) {
+            recalculate(krId, event.operatorId(),
+                    "任务删除后清理投影并重算（taskId=" + event.taskId() + " 已删除，eventId="
+                            + event.eventId() + "）");
+        }
+        markResult(event.eventId(), "applied", null,
+                "任务删除：清理投影 KR=" + affectedKrIds + "（任务原 krId=" + event.krId() + "）");
+        log.info("任务删除投影清理完成：taskId={} 受影响 KR={}", event.taskId(), affectedKrIds);
+    }
+
+    /** 按投影表 COUNT 重算指定 KR 的任务驱动型进度（非任务驱动型 / KR 不存在时安全跳过）。 */
+    private void recalculate(Long krId, Long operatorId, String reason) {
+        Map<String, Object> keyResult = keyResultMapper.selectKeyResultById(krId);
+        if (keyResult == null) {
+            log.info("KR 不存在或已删除，跳过重算：krId={}", krId);
+            return;
+        }
+        if (!"task_driven".equals(String.valueOf(keyResult.get("krType")))) {
+            log.info("非任务驱动型 KR，跳过重算：krId={}", krId);
+            return;
+        }
+        int taskCount = eventMapper.countRootTasks(krId);
+        int doneTaskCount = eventMapper.countDoneRootTasks(krId);
+        keyResultService.applyTaskWriteback(krId, doneTaskCount, taskCount, resolveOperator(operatorId), reason);
+    }
+
     private void insertEventLog(TaskStatusChangedEvent event, String processResult, String reason) {
+        insertEventLog(event.eventId(), event.eventType(), event.taskId(), event.krId(), event.rootTaskId(),
+                event.isRoot(), event.fromStatus(), event.toStatus(), event.operatorId(),
+                toLocalDateTime(event.occurredAt()), processResult, reason);
+    }
+
+    private void insertEventLog(
+            String eventId, String eventType, Long taskId, Long krId, Long rootTaskId, boolean isRoot,
+            String fromStatus, String toStatus, Long operatorId, LocalDateTime occurredAt,
+            String processResult, String reason
+    ) {
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("eventId", event.eventId());
-        row.put("eventType", event.eventType());
-        row.put("taskId", event.taskId());
-        row.put("krId", event.krId());
-        row.put("rootTaskId", event.rootTaskId());
-        row.put("isRoot", event.isRoot());
-        row.put("fromStatus", event.fromStatus());
-        row.put("toStatus", event.toStatus());
-        row.put("operatorId", event.operatorId());
-        row.put("occurredAt", toLocalDateTime(event));
+        row.put("eventId", eventId);
+        row.put("eventType", eventType);
+        row.put("taskId", taskId);
+        row.put("krId", krId);
+        row.put("rootTaskId", rootTaskId);
+        row.put("isRoot", isRoot);
+        row.put("fromStatus", fromStatus);
+        row.put("toStatus", toStatus);
+        row.put("operatorId", operatorId);
+        row.put("occurredAt", occurredAt);
         row.put("processResult", processResult);
         row.put("reason", truncate(reason));
         eventMapper.insertEventLog(row);
@@ -173,9 +307,16 @@ public class OkrTaskEventSubscriber {
         return event.completed() ? toLocalDateTime(event) : null;
     }
 
+    private LocalDateTime completedAt(String taskStatus, Instant occurredAt) {
+        return TaskStatusChangedEvent.STATUS_DONE.equals(taskStatus) ? toLocalDateTime(occurredAt) : null;
+    }
+
     private LocalDateTime toLocalDateTime(TaskStatusChangedEvent event) {
-        return event.occurredAt() == null ? null
-                : LocalDateTime.ofInstant(event.occurredAt(), ZoneId.systemDefault());
+        return toLocalDateTime(event.occurredAt());
+    }
+
+    private LocalDateTime toLocalDateTime(Instant instant) {
+        return instant == null ? null : LocalDateTime.ofInstant(instant, ZoneId.systemDefault());
     }
 
     private BigDecimal decimal(Object value) {

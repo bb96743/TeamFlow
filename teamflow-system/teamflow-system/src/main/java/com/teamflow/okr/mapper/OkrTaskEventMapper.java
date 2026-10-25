@@ -1,5 +1,6 @@
 package com.teamflow.okr.mapper;
 
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -8,6 +9,7 @@ import org.apache.ibatis.annotations.Update;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -89,4 +91,36 @@ public interface OkrTaskEventMapper {
             WHERE kr_id = #{krId} AND process_result = #{processResult}
             """)
     int countEvents(@Param("krId") Long krId, @Param("processResult") String processResult);
+
+    // ------------------------------------------------------------------
+    // 投影清理（M03 补发的两个 G-3 遗留事件消费用）
+    // ------------------------------------------------------------------
+
+    /**
+     * 删除某任务在某 KR 上的投影行（任务改挂 KR：清理旧 KR）。
+     */
+    @Delete("""
+            DELETE FROM okr_kr_task_link
+            WHERE kr_id = #{krId} AND task_id = #{taskId}
+            """)
+    int deleteTaskLink(@Param("krId") Long krId, @Param("taskId") Long taskId);
+
+    /**
+     * 查某任务在所有 KR 上的投影行所属 KR（任务删除时先取受影响 KR，供重算）。
+     */
+    @Select("""
+            SELECT DISTINCT kr_id FROM okr_kr_task_link
+            WHERE task_id = #{taskId}
+            ORDER BY kr_id
+            """)
+    List<Long> selectKrIdsByTaskId(@Param("taskId") Long taskId);
+
+    /**
+     * 删除某任务在所有 KR 上的投影行（任务逻辑删除：完全退出 KR 分母）。
+     */
+    @Delete("""
+            DELETE FROM okr_kr_task_link
+            WHERE task_id = #{taskId}
+            """)
+    int deleteTaskLinksByTaskId(@Param("taskId") Long taskId);
 }
