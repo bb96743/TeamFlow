@@ -46,4 +46,27 @@ public class TaskPerfQueryService {
         }
         return taskMapper.selectPerfTopLevelTasks(assigneeId, startDate.toString(), endDate.toString());
     }
+
+    /**
+     * 成员负载取数（M04 团队视图用，L0 §9.1 {@code D-2026-10-26-08} 结论一）。
+     *
+     * <p>M04 **不得直连 {@code task_*}**：由本只读端口按用户集合批量返回顶层任务的
+     * 「任务总数 / 进行中数」，M04 注入本 Service 获取。只读、无业务副作用、不改变任务语义。</p>
+     *
+     * @param assigneeIds 用户 ID 集合（可含 null/重复，内部去重；空集合返回空列表）
+     * @return 每行 {@code assigneeId / taskTotal / taskInProgress}；无任务的用户不出现在结果中（消费方补 0）
+     */
+    public List<Map<String, Object>> memberTaskLoads(List<Long> assigneeIds) {
+        if (assigneeIds == null || assigneeIds.isEmpty()) {
+            return List.of();
+        }
+        List<Long> userIds = assigneeIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (userIds.isEmpty()) {
+            return List.of();
+        }
+        return taskMapper.selectMemberTaskLoads(userIds);
+    }
 }

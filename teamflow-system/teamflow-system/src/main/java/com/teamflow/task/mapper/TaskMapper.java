@@ -286,4 +286,32 @@ public interface TaskMapper {
             @Param("startDate") String startDate,
             @Param("endDate") String endDate
     );
+
+    /**
+     * 成员负载取数（M04 团队模块用，只读）：按用户集合批量统计**顶层任务**的
+     * 「任务总数 / 进行中数」。
+     *
+     * <p>口径与 M02/M05 一致：顶层任务（不存在 {@code subtask} 关系的任务）、未删除；
+     * {@code taskTotal} 含全部状态，{@code taskInProgress} 只统计 {@code status='in_progress'}。
+     * 本 SQL 属 M03 自有表访问，M04 只经 {@code TaskPerfQueryService} 取数，**不直连 {@code task_*}**。</p>
+     */
+    @Select("""
+            <script>
+            SELECT t.assignee_id AS assigneeId,
+                   COUNT(*) AS taskTotal,
+                   COALESCE(SUM(CASE WHEN t.status = 'in_progress' THEN 1 ELSE 0 END), 0) AS taskInProgress
+            FROM task_task t
+            WHERE t.deleted = 0
+              AND t.assignee_id IN
+              <foreach collection="assigneeIds" item="assigneeId" open="(" separator="," close=")">
+                  #{assigneeId}
+              </foreach>
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_relation r
+                  WHERE r.task_id = t.id AND r.relation_type = 'subtask' AND r.deleted = 0
+              )
+            GROUP BY t.assignee_id
+            </script>
+            """)
+    List<Map<String, Object>> selectMemberTaskLoads(@Param("assigneeIds") List<Long> assigneeIds);
 }
