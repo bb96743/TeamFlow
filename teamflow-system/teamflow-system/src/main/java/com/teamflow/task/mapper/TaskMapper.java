@@ -248,4 +248,42 @@ public interface TaskMapper {
             WHERE id = #{id} AND deleted = 0
             """)
     int softDeleteTask(@Param("id") Long id, @Param("operator") String operator);
+
+    // ------------------------------------------------------------------
+    // M05 绩效归集取数（跨模块只走 Service：TaskPerfQueryService 是本模块唯一的对外读出口）
+    // ------------------------------------------------------------------
+
+    /**
+     * 归集取数：某责任人在给定日期范围内的**顶层任务事实**（M05 绩效归集用，只读）。
+     *
+     * <p>顶层任务 = 不存在 {@code task_relation.relation_type='subtask'} 关系的任务（子任务不计入
+     * 分子/分母，与 M02 的 KR 进度口径一致）。时间范围：{@code due_date} 落在周期内；
+     * {@code due_date} 为空时按 {@code create_time} 落在周期内判定。</p>
+     */
+    @Select("""
+            SELECT t.id AS taskId,
+                   t.task_title AS taskTitle,
+                   t.status,
+                   t.kr_id AS krId,
+                   DATE_FORMAT(t.due_date, '%Y-%m-%d') AS dueDate,
+                   DATE_FORMAT(t.done_time, '%Y-%m-%d %H:%i') AS doneTime,
+                   t.assignee_id AS assigneeId
+            FROM task_task t
+            WHERE t.deleted = 0
+              AND t.assignee_id = #{assigneeId}
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_relation r
+                  WHERE r.task_id = t.id AND r.relation_type = 'subtask' AND r.deleted = 0
+              )
+              AND (
+                  (t.due_date IS NOT NULL AND t.due_date BETWEEN #{startDate} AND #{endDate})
+                  OR (t.due_date IS NULL AND DATE(t.create_time) BETWEEN #{startDate} AND #{endDate})
+              )
+            ORDER BY t.id
+            """)
+    List<Map<String, Object>> selectPerfTopLevelTasks(
+            @Param("assigneeId") Long assigneeId,
+            @Param("startDate") String startDate,
+            @Param("endDate") String endDate
+    );
 }
