@@ -72,6 +72,30 @@ jobs:
         working-directory: teamflow-system
         run: mvn -B -pl teamflow-server -am test
 
+      # 失败诊断：把失败测试摘要写成 ::error:: 注解，
+      # 便于在没有仓库 admin 权限、无法下载 job log 时也能从 check-run annotations API 读到原因。
+      - name: Diagnose test failures
+        if: failure()
+        working-directory: teamflow-system
+        run: |
+          set +e
+          found=0
+          while IFS= read -r f; do
+            summary=$(grep -E '^Tests run: .*(Failures: [1-9]|Errors: [1-9])' "$f" | head -1)
+            [ -z "$summary" ] && continue
+            found=1
+            testset=$(basename "$f" .txt)
+            echo "::error title=Failing test set::${testset} — ${summary}"
+            # 输出该文件里的异常首行与前若干栈帧，便于定位
+            grep -E '^(java\.|org\.|com\.|AssertionError|Caused by:)' "$f" | head -3 | while IFS= read -r line; do
+              echo "::error title=Failure detail (${testset})::${line}"
+            done
+          done < <(find . -path '*/surefire-reports/*.txt' -type f 2>/dev/null)
+          if [ "$found" = "0" ]; then
+            echo "::error title=No failing test set found::测试阶段失败但未找到 surefire 失败摘要，可能是编译失败、Flyway 迁移失败或依赖解析失败——请检查上一步日志"
+          fi
+          exit 0
+
       - name: Upload surefire reports
         if: always()
         uses: actions/upload-artifact@v4
