@@ -43,6 +43,7 @@ public class TaskFlowService extends TaskServiceSupport {
     private final TaskPlatformMapper platformMapper;
     private final TaskFlowTraceService traceService;
     private final TaskStatusService statusService;
+    private final TaskTodoPushService todoPushService;
 
     public TaskFlowService(
             FlowDefinitionMapper definitionMapper,
@@ -51,7 +52,8 @@ public class TaskFlowService extends TaskServiceSupport {
             TaskMapper taskMapper,
             TaskPlatformMapper platformMapper,
             TaskFlowTraceService traceService,
-            TaskStatusService statusService
+            TaskStatusService statusService,
+            TaskTodoPushService todoPushService
     ) {
         this.definitionMapper = definitionMapper;
         this.instanceMapper = instanceMapper;
@@ -60,6 +62,7 @@ public class TaskFlowService extends TaskServiceSupport {
         this.platformMapper = platformMapper;
         this.traceService = traceService;
         this.statusService = statusService;
+        this.todoPushService = todoPushService;
     }
 
     // ------------------------------------------------------------------
@@ -202,6 +205,9 @@ public class TaskFlowService extends TaskServiceSupport {
         flowTask.put("status", "pending");
         flowTask.put("remark", trimToNull(request.getOpinion()));
         flowTaskMapper.insertFlowTask(flowTask, username);
+        // R1（M10）：审批节点投递收件箱待办（bizId = flow_task.id，处理时由 M03 handler 驱动审批决策）
+        todoPushService.pushApprovalTodo(
+                numberAsLong(flowTask.get("id")), approverId, String.valueOf(task.get("taskTitle")), instanceId);
         return new TaskIdResponse(instanceId);
     }
 

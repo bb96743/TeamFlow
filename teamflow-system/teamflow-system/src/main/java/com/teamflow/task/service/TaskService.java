@@ -49,6 +49,7 @@ public class TaskService extends TaskServiceSupport {
     private final TaskFlowTraceService traceService;
     private final TaskEventPublisher eventPublisher;
     private final TaskStatusService statusService;
+    private final TaskTodoPushService todoPushService;
 
     public TaskService(
             TaskMapper taskMapper,
@@ -58,7 +59,8 @@ public class TaskService extends TaskServiceSupport {
             TaskHierarchyService hierarchyService,
             TaskFlowTraceService traceService,
             TaskEventPublisher eventPublisher,
-            TaskStatusService statusService
+            TaskStatusService statusService,
+            TaskTodoPushService todoPushService
     ) {
         this.taskMapper = taskMapper;
         this.relationMapper = relationMapper;
@@ -68,6 +70,7 @@ public class TaskService extends TaskServiceSupport {
         this.traceService = traceService;
         this.eventPublisher = eventPublisher;
         this.statusService = statusService;
+        this.todoPushService = todoPushService;
     }
 
     // ------------------------------------------------------------------
@@ -163,6 +166,7 @@ public class TaskService extends TaskServiceSupport {
                 : platformMapper.selectDeptIdByUserId(assigneeId);
 
         String status = assigneeId == null ? TaskStatusMachine.POOL : TaskStatusMachine.TODO;
+        java.time.LocalDate dueDate = parseDate(request.getDueDate(), "截止日期");
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("taskTitle", title);
         row.put("taskDesc", trimToNull(request.getTaskDesc()));
@@ -174,7 +178,7 @@ public class TaskService extends TaskServiceSupport {
         row.put("creatorId", operatorId);
         row.put("deptId", deptId);
         row.put("startDate", parseDate(request.getStartDate(), "计划开始日期"));
-        row.put("dueDate", parseDate(request.getDueDate(), "截止日期"));
+        row.put("dueDate", dueDate);
         row.put("subTaskCount", 0);
         row.put("doneSubTaskCount", 0);
         row.put("sort", request.getSort() == null ? 0 : request.getSort());
@@ -195,6 +199,10 @@ public class TaskService extends TaskServiceSupport {
         eventPublisher.publishStatusChanged(
                 taskId, krId, hierarchyService.rootTaskId(taskId), hierarchyService.isRoot(taskId),
                 null, status, operatorId);
+        // R1（M10）：指派事项投递到待办收件箱（统一入口，禁止 M10 表直写）
+        if (assigneeId != null) {
+            todoPushService.pushAssignTodo(taskId, assigneeId, title, dueDate, priority);
+        }
         return new TaskIdResponse(taskId);
     }
 
@@ -279,6 +287,11 @@ public class TaskService extends TaskServiceSupport {
                     hierarchyService.isRoot(taskId), fromStatus, toStatus, operatorId);
         } else {
             traceService.recordAssignment(existing, fromStatus, operatorId, username, opinion);
+        }
+        // R1（M10）：指派/转派后给新责任人投递收件箱待办（幂等：同一人同一任务只一条）
+        if (assigneeId != null) {
+            todoPushService.pushAssignTodo(taskId, assigneeId, String.valueOf(existing.get("taskTitle")),
+                    TaskTodoPushService.dueDateOf(existing), String.valueOf(existing.get("priority")));
         }
         // 注意：这里不能调 this.detail(taskId)——同类自调用不会经过 @DataScope 代理，
         // 会拿到默认拒绝的空数据范围而误报「任务不存在」；写操作已用内部查询校验过存在性。

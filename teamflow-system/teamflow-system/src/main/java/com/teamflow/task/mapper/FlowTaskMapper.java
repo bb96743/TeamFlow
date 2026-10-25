@@ -39,6 +39,18 @@ public interface FlowTaskMapper {
             """)
     Map<String, Object> selectPendingByInstance(@Param("instanceId") Long instanceId);
 
+    /**
+     * 按待办 ID 取审批待办（M10 收件箱的 {@code task_approval} handler 用：bizId 即 flow_task.id）。
+     */
+    @Select("""
+            SELECT t.id, t.instance_id AS instanceId, t.biz_id AS bizId, t.node_key AS nodeKey,
+                   t.task_title AS taskTitle, t.assignee_id AS assigneeId, t.status, t.opinion
+            FROM flow_task t
+            WHERE t.id = #{id} AND t.deleted = 0
+            LIMIT 1
+            """)
+    Map<String, Object> selectFlowTaskById(@Param("id") Long id);
+
     @Select("""
             SELECT t.id,
                    t.instance_id AS instanceId,
