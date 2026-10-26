@@ -31,6 +31,9 @@ import { teamComponents } from './team'
 import { recruitComponents } from './recruit'
 import { insightComponents } from './insight'
 import { projectComponents } from './project'
+import { collabComponents } from './collab'
+import { knowledgeComponents } from './knowledge'
+import { meetingComponents } from './meeting'
 
 /** 全部业务模块注册表的聚合结果（供 auth.ts 合并进 COMPONENT_MAP） */
 export const moduleComponentMap: ModuleComponentMap = {
@@ -42,4 +45,7 @@ export const moduleComponentMap: ModuleComponentMap = {
   ...recruitComponents,
   ...insightComponents,
   ...projectComponents,
+  ...collabComponents,
+  ...knowledgeComponents,
+  ...meetingComponents,
 }

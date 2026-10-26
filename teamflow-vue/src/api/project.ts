@@ -176,6 +176,177 @@ export interface KrOption {
   progress?: number | null
 }
 
+/* ============================================================
+   M3 扩展（需求 2.5.2 甘特 / 2.5.3 风险 / 2.5.4 复盘）
+   ------------------------------------------------------------
+   甘特：任务标题/起止/状态/完成度由后端从任务模块实时读取，
+   前端只做时间轴定位，**不在前端计算完成度**；任务不可见时后端
+   返回 missing=true，界面标注而不是整页失败。
+   风险：状态流转以每行 nextStatuses / 状态机为准，非法流转后端 400。
+   复盘：正文归档到知识库，本模块只返回 retroPageId；页面不保存正文。
+   ============================================================ */
+
+export interface ProjectTaskLinkRow {
+  id: number
+  projectId: number
+  taskId: number
+  linkType: string
+  linkTypeLabel?: string | null
+  remark?: string | null
+  createTime?: string
+}
+
+export interface ProjectTaskLinkRequest {
+  taskId: number
+  linkType?: string
+  remark?: string | null
+}
+
+export interface ProjectGanttTaskRow {
+  linkId: number
+  taskId: number
+  linkType: string
+  linkTypeLabel?: string | null
+  linkRemark?: string | null
+  taskTitle?: string | null
+  status?: string | null
+  statusLabel?: string | null
+  priority?: string | null
+  startDate?: string | null
+  dueDate?: string | null
+  doneTime?: string | null
+  assigneeName?: string | null
+  /** 完成度由后端按任务模块口径给出，前端只展示 */
+  completionPercent?: number | null
+  delayed?: boolean
+  /** 任务已删除或当前账号无任务可见权限：界面标注「任务不可见」，不视为整页错误 */
+  missing?: boolean
+  missingReason?: string | null
+}
+
+export interface ProjectGanttSummary {
+  linkedTaskCount: number
+  visibleTaskCount: number
+  completedTaskCount: number
+  inProgressTaskCount: number
+  notStartedTaskCount: number
+  delayedTaskCount: number
+  taskCompletionPercent?: number | null
+  milestoneCount?: number
+  completedMilestoneCount?: number
+  delayedMilestoneCount?: number
+  projectProgress?: number | null
+}
+
+export interface ProjectGanttData {
+  projectId: number
+  projectCode?: string
+  projectName?: string
+  status: string
+  statusLabel?: string
+  startDate?: string | null
+  endDate?: string | null
+  ownerName?: string | null
+  tasks: ProjectGanttTaskRow[]
+  milestones: ProjectMilestoneRow[]
+  summary: ProjectGanttSummary
+  taskSource?: string
+  /** 后端明示关键路径未实现，界面如实说明、不假装有依赖图 */
+  criticalPathSupported?: boolean
+  criticalPathNote?: string | null
+}
+
+export interface ProjectRiskLogRow {
+  id: number
+  riskId: number
+  fromStatus?: string | null
+  toStatus: string
+  actionNote?: string | null
+  operatorId?: number | null
+  operatorName?: string | null
+  createTime?: string
+}
+
+export interface ProjectRiskRow {
+  id: number
+  projectId: number
+  riskTitle: string
+  riskDesc?: string | null
+  riskLevel: string
+  riskLevelLabel?: string
+  riskType: string
+  riskTypeLabel?: string
+  ownerId?: number | null
+  ownerName?: string | null
+  responsePlan?: string | null
+  dueDate?: string | null
+  status: string
+  statusLabel?: string
+  /** 允许流转到的目标状态（风险状态机唯一来源，非法流转按钮不展示） */
+  nextStatuses?: string[]
+  delayed?: boolean
+  remark?: string | null
+  createTime?: string
+  updateTime?: string
+  logs?: ProjectRiskLogRow[]
+}
+
+export interface ProjectRiskWriteRequest {
+  riskTitle?: string
+  riskDesc?: string | null
+  riskLevel?: string
+  riskType?: string
+  ownerId?: number | null
+  responsePlan?: string | null
+  dueDate?: string | null
+  remark?: string | null
+}
+
+export interface ProjectRiskStatusMachine {
+  states: Array<{ code: string; label: string; terminal: boolean }>
+  transitions: Record<string, string[]>
+  levels: string[]
+  types: string[]
+}
+
+export interface ProjectRetroData {
+  projectId: number
+  projectName?: string
+  projectCode?: string
+  status: string
+  statusLabel?: string
+  retroPageId?: number | null
+  retroArchivedTime?: string | null
+  retroArchivedBy?: string | null
+  retroArchived: boolean
+  /** 项目结项（closed）或归档（archived）后才允许归档 */
+  canArchive: boolean
+  archiveRule?: string
+}
+
+export interface ProjectRetroTemplate extends ProjectRetroData {
+  templateTitle: string
+  templateContent: string
+  templateNote?: string
+}
+
+export interface ProjectRetroArchiveRequest {
+  title?: string | null
+  content: string
+  tags?: string[] | null
+  summary?: string | null
+}
+
+export interface ProjectRetroArchiveResult {
+  projectId: number
+  retroPageId: number
+  created: boolean
+  versionNo?: number | null
+  pageType?: string
+  spaceId?: number | null
+  nodeId?: number | null
+  contentStoredIn?: string
+}
 export function createProjectApi(client: HttpClient) {
   return {
     projects: {
@@ -206,7 +377,41 @@ export function createProjectApi(client: HttpClient) {
       remove: (projectId: number, milestoneId: number) =>
         client.delete<void>(`/project/projects/${projectId}/milestones/${milestoneId}`),
     },
-    /** 立项时可选的目标（目标模块公开只读接口；不作为本模块数据副本） */
+    /* ── M3 扩展：甘特/任务关联、风险、复盘 ── */
+    gantt: {
+      get: (projectId: number) => client.get<ProjectGanttData>(`/project/projects/${projectId}/gantt`),
+    },
+    taskLinks: {
+      list: (projectId: number) => client.get<ProjectTaskLinkRow[]>(`/project/projects/${projectId}/tasks`),
+      add: (projectId: number, body: ProjectTaskLinkRequest) =>
+        client.post<IdResponse>(`/project/projects/${projectId}/tasks`, body),
+      remove: (projectId: number, linkId: number) =>
+        client.delete<void>(`/project/projects/${projectId}/tasks/${linkId}`),
+    },
+    risks: {
+      statusMachine: () => client.get<ProjectRiskStatusMachine>('/project/projects/risk-status-machine'),
+      list: (projectId: number, query?: QueryParams) =>
+        client.get<PageResult<ProjectRiskRow>>(`/project/projects/${projectId}/risks`, query),
+      detail: (projectId: number, riskId: number) =>
+        client.get<ProjectRiskRow>(`/project/projects/${projectId}/risks/${riskId}`),
+      create: (projectId: number, body: ProjectRiskWriteRequest) =>
+        client.post<IdResponse>(`/project/projects/${projectId}/risks`, body),
+      update: (projectId: number, riskId: number, body: ProjectRiskWriteRequest) =>
+        client.put<void>(`/project/projects/${projectId}/risks/${riskId}`, body),
+      changeStatus: (projectId: number, riskId: number, body: { status: string; note?: string | null }) =>
+        client.put<ProjectRiskRow>(`/project/projects/${projectId}/risks/${riskId}/status`, body),
+      logs: (projectId: number, riskId: number) =>
+        client.get<ProjectRiskLogRow[]>(`/project/projects/${projectId}/risks/${riskId}/logs`),
+      remove: (projectId: number, riskId: number) =>
+        client.delete<void>(`/project/projects/${projectId}/risks/${riskId}`),
+    },
+    retro: {
+      get: (projectId: number) => client.get<ProjectRetroData>(`/project/projects/${projectId}/retro`),
+      template: (projectId: number) =>
+        client.get<ProjectRetroTemplate>(`/project/projects/${projectId}/retro/template`),
+      archive: (projectId: number, body: ProjectRetroArchiveRequest) =>
+        client.post<ProjectRetroArchiveResult>(`/project/projects/${projectId}/retro/archive`, body),
+    },    /** 立项时可选的目标（目标模块公开只读接口；不作为本模块数据副本） */
     objectives: () => client.get<PageResult<ObjectiveOption>>('/okr/objectives', { pageNum: 1, pageSize: 100 }),
     /** 里程碑可绑定的 KR（目标模块公开只读接口） */
     keyResults: (objectiveId: number) =>
