@@ -120,6 +120,20 @@
                     </dependency>
                 </dependencies>
             </plugin>
+            <!-- M2-7 测试库隔离：集成测试用 test profile 运行（数据源见
+                 src/test/resources/application-test.yml，库名 ${TEST_DB_NAME:teamflow_test}）。
+                 环境变量 SPRING_PROFILES_ACTIVE 的优先级高于 application.yml 的 spring.profiles.active: dev，
+                 因此无需修改 application.yml、也无需修改任何测试类；测试只写 teamflow_test，
+                 开发/演示库 teamflow 保持零污染。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <environmentVariables>
+                        <SPRING_PROFILES_ACTIVE>test</SPRING_PROFILES_ACTIVE>
+                    </environmentVariables>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

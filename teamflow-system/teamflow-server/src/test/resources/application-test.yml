@@ -1,0 +1,40 @@
+# ============================================================================
+# M2-7 测试专用 profile：集成测试库与开发演示库隔离
+# ============================================================================
+# 激活方式：teamflow-server/pom.xml 的 surefire <environmentVariables> 设置
+#   SPRING_PROFILES_ACTIVE=test
+# （环境变量优先级高于 application.yml 的 spring.profiles.active: dev，因此无需改 application.yml、
+#   也无需改任何测试类。）
+#
+# 目的：`mvn test` 只读写 teamflow_test，开发/演示库 teamflow 保持零污染。
+#
+# 关键点：
+#   · 库名用 ${TEST_DB_NAME:teamflow_test}，**不要**用 ${DB_NAME:...}——
+#     CI 的 workflow 设置了 DB_NAME=teamflow，若复用会把测试打回开发库；
+#   · url 追加 createDatabaseIfNotExist=true：首次跑测试自动建库（需要 DB 用户有 CREATE 权限，root 满足）；
+#   · 首次建库后 Flyway 从 V1 全量迁移到最新版本（空 schema 会跳过 baseline），
+#     V2 种子（admin/chensy/wumin 等）自动就绪，测试自举、无需手工初始化；
+#   · Redis 与开发环境共用（JWT token / 验证码），不影响数据隔离；
+#   · 清理测试库：DROP DATABASE teamflow_test;（下次测试会重新建库并全量迁移）。
+spring:
+  main:
+    banner-mode: console
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${TEST_DB_NAME:teamflow_test}?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:root}
+    hikari:
+      data-source-properties:
+        connectionTimeZone: "${DB_TIMEZONE:+08:00}"
+        forceConnectionTimeZoneToSession: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+logging:
+  level:
+    root: info
+    com.teamflow: info
