@@ -59,11 +59,18 @@ public interface TeamMemberMapper {
             """)
     Map<String, Object> selectMemberById(@Param("id") Long id);
 
+    /**
+     * 按团队 + 用户查最近一条成员记录（V18 后同一 (team_id, user_id) 可有多行历史）。
+     *
+     * <p>排序保证「在册行优先、最新行优先」：服务层据此判断是否在册；若在册行存在则重复加入被拒，
+     * 否则（只查到历史行）走「新建一行」的重加入路径。</p>
+     */
     @Select("""
             SELECT id, team_id AS teamId, user_id AS userId, team_role AS teamRole,
                    join_time AS joinTime, leave_time AS leaveTime
             FROM team_member
             WHERE team_id = #{teamId} AND user_id = #{userId} AND deleted = 0
+            ORDER BY (leave_time IS NULL) DESC, id DESC
             LIMIT 1
             """)
     Map<String, Object> selectByTeamAndUser(@Param("teamId") Long teamId, @Param("userId") Long userId);
@@ -95,7 +102,13 @@ public interface TeamMemberMapper {
     @Options(useGeneratedKeys = true, keyProperty = "row.id")
     int insertMember(@Param("row") Map<String, Object> row, @Param("operator") String operator);
 
-    /** 重新加入：重置 join_time、清空 leave_time、更新角色与备注。 */
+    /**
+     * 重新加入（重置 join_time、清空 leave_time、更新角色与备注）。
+     *
+     * @deprecated L-2 / V18 起**不再使用**：重新加入必须新建一行以保留历史任职记录
+     *             （见 {@code TeamMemberService#add}）。保留方法仅为兼容历史调用点，禁止新增调用。
+     */
+    @Deprecated
     @Update("""
             UPDATE team_member
             SET team_role = #{teamRole},

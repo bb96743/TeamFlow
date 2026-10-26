@@ -96,7 +96,13 @@ public class TeamMemberService extends TeamServiceSupport {
     // 成员写操作
     // ------------------------------------------------------------------
 
-    /** 添加成员（R6 审计由 Controller 的 @OperLog 承担）；已移出成员再次添加时复活同一行。 */
+    /**
+     * 添加成员（R6 审计由 Controller 的 {@code @OperLog} 承担）。
+     *
+     * <p><b>L-2（V18 起）</b>：已移出成员再次添加时**新建一行**（而不是复活原行），
+     * 上一段任职记录（{@code leave_time} 有值的历史行）完整保留，满足 R3「保留历史便于绩效追溯」。
+     * 在册成员重复加入仍拒绝（{@code uk_team_member_active} 仅对在册行唯一）。</p>
+     */
     @Transactional
     public Long add(Long teamId, TeamMemberAddRequest request) {
         Map<String, Object> team = requireTeam(teamId);
@@ -112,18 +118,12 @@ public class TeamMemberService extends TeamServiceSupport {
         Map<String, Object> existing = memberMapper.selectByTeamAndUser(teamId, userId);
         Long memberId;
         if (existing == null) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("teamId", teamId);
-            row.put("userId", userId);
-            row.put("teamRole", role.name());
-            row.put("remark", trimToNull(request.getRemark()));
-            memberMapper.insertMember(row, operator);
-            memberId = numberAsLong(row.get("id"));
+            memberId = insertMember(teamId, userId, role.name(), trimToNull(request.getRemark()), operator);
         } else if (existing.get("leaveTime") == null) {
             throw new BusinessException("该用户已在团队中（在册成员），不能重复加入");
         } else {
-            memberId = numberAsLong(existing.get("id"));
-            memberMapper.reviveMember(memberId, role.name(), trimToNull(request.getRemark()), operator);
+            // L-2：重新加入新建一行，保留上一段任职记录（不再 revive 覆盖）
+            memberId = insertMember(teamId, userId, role.name(), trimToNull(request.getRemark()), operator);
         }
         if (role == TeamRole.OWNER) {
             applyOwnership(teamId, memberId, userId, operator);
@@ -183,23 +183,27 @@ public class TeamMemberService extends TeamServiceSupport {
         Map<String, Object> existing = memberMapper.selectByTeamAndUser(teamId, userId);
         Long memberId;
         if (existing == null) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("teamId", teamId);
-            row.put("userId", userId);
-            row.put("teamRole", TeamRole.OWNER.name());
-            row.put("remark", "设置负责人时自动加入团队");
-            memberMapper.insertMember(row, operator);
-            memberId = numberAsLong(row.get("id"));
+            memberId = insertMember(teamId, userId, TeamRole.OWNER.name(), "设置负责人时自动加入团队", operator);
+        } else if (existing.get("leaveTime") != null) {
+            // L-2：重新加入新建一行（保留上一段任职记录）
+            memberId = insertMember(teamId, userId, TeamRole.OWNER.name(), "重新加入并设为负责人", operator);
         } else {
             memberId = numberAsLong(existing.get("id"));
-            if (existing.get("leaveTime") != null) {
-                memberMapper.reviveMember(memberId, TeamRole.OWNER.name(), "重新加入并设为负责人", operator);
-            } else {
-                memberMapper.updateMemberRole(memberId, TeamRole.OWNER.name(), operator);
-            }
+            memberMapper.updateMemberRole(memberId, TeamRole.OWNER.name(), operator);
         }
         applyOwnership(teamId, memberId, userId, operator);
         return memberId;
+    }
+
+    /** 新增一条成员记录并返回主键（V18 后重新加入也走这里，历史行保留）。 */
+    private Long insertMember(Long teamId, Long userId, String teamRole, String remark, String operator) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("teamId", teamId);
+        row.put("userId", userId);
+        row.put("teamRole", teamRole);
+        row.put("remark", remark);
+        memberMapper.insertMember(row, operator);
+        return numberAsLong(row.get("id"));
     }
 
     // ------------------------------------------------------------------
