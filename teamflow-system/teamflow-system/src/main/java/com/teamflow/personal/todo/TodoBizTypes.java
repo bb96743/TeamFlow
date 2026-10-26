@@ -18,9 +18,17 @@ public final class TodoBizTypes {
     public static final String TASK_APPROVAL = "task_approval";
     /** M06 会议邀请（M06 未开工：**仅预留登记位**，本期无 handler）。 */
     public static final String MEETING_INVITE = "meeting_invite";
+    /**
+     * M09 评论/消息 @提及提醒（L0 §9.1 D-2026-10-26-11 结论四：通知只投递不代劳）。
+     *
+     * <p>与 {@link #MEETING_INVITE} 同类：已登记、**无 handler** —— 允许投递入库，
+     * 在收件箱直接处理时由 M10 拒绝并提示「该类型暂不支持在收件箱直接处理」，
+     * 用户点 actionUrl 回源到评论/消息位置。M10 不引入任何 M09 实现依赖。</p>
+     */
+    public static final String COLLAB_MENTION = "collab_mention";
 
     private static final Set<String> KNOWN = new LinkedHashSet<>(Set.of(
-            TASK_ASSIGN, TASK_APPROVAL, MEETING_INVITE));
+            TASK_ASSIGN, TASK_APPROVAL, MEETING_INVITE, COLLAB_MENTION));
 
     private TodoBizTypes() {
     }
