@@ -37,6 +37,8 @@ public class ProjectService extends ProjectServiceSupport {
     private final ProjectMapper projectMapper;
     private final ProjectMemberService memberService;
     private final ProjectMilestoneService milestoneService;
+    private final ProjectTaskLinkService taskLinkService;
+    private final ProjectRiskService riskService;
     private final OkrObjectiveService okrObjectiveService;
 
     public ProjectService(
@@ -44,12 +46,16 @@ public class ProjectService extends ProjectServiceSupport {
             ProjectMapper projectMapper,
             ProjectMemberService memberService,
             ProjectMilestoneService milestoneService,
+            ProjectTaskLinkService taskLinkService,
+            ProjectRiskService riskService,
             OkrObjectiveService okrObjectiveService
     ) {
         super(platformMapper);
         this.projectMapper = projectMapper;
         this.memberService = memberService;
         this.milestoneService = milestoneService;
+        this.taskLinkService = taskLinkService;
+        this.riskService = riskService;
         this.okrObjectiveService = okrObjectiveService;
     }
 
@@ -185,6 +191,8 @@ public class ProjectService extends ProjectServiceSupport {
         }
         memberService.cascadeSoftDelete(id);
         milestoneService.cascadeSoftDelete(id);
+        taskLinkService.cascadeSoftDelete(id);
+        riskService.cascadeSoftDelete(id);
         projectMapper.softDeleteProject(id, currentUsername());
     }
 

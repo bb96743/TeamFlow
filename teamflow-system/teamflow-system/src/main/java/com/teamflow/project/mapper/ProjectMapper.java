@@ -36,6 +36,9 @@ public interface ProjectMapper {
                    p.status,
                    p.priority,
                    p.remark,
+                   p.retro_page_id AS retroPageId,
+                   DATE_FORMAT(p.retro_archived_time, '%Y-%m-%d %H:%i') AS retroArchivedTime,
+                   p.retro_archived_by AS retroArchivedBy,
                    DATE_FORMAT(p.create_time, '%Y-%m-%d %H:%i') AS createTime,
                    DATE_FORMAT(p.update_time, '%Y-%m-%d %H:%i') AS updateTime,
                    (SELECT COUNT(*) FROM proj_milestone m WHERE m.project_id = p.id AND m.deleted = 0) AS milestoneCount,
@@ -174,4 +177,19 @@ public interface ProjectMapper {
 
     @Update("UPDATE proj_project SET deleted = 1, update_by = #{operator} WHERE id = #{id} AND deleted = 0")
     int softDeleteProject(@Param("id") Long id, @Param("operator") String operator);
+
+    /** 复盘归档：只写引用列（pageId / 归档时间 / 操作人），绝不写复盘正文（R4、D-11 结论三）。 */
+    @Update("""
+            UPDATE proj_project
+            SET retro_page_id = #{pageId},
+                retro_archived_time = #{archivedTime},
+                retro_archived_by = #{operator},
+                update_by = #{operator}
+            WHERE id = #{id} AND deleted = 0
+            """)
+    int updateRetroArchive(
+            @Param("id") Long id,
+            @Param("pageId") Long pageId,
+            @Param("archivedTime") java.time.LocalDateTime archivedTime,
+            @Param("operator") String operator);
 }
