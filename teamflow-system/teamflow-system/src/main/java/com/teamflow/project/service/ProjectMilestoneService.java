@@ -1,7 +1,5 @@
 package com.teamflow.project.service;
 
-import com.teamflow.common.domain.PageQuery;
-import com.teamflow.common.domain.PageResult;
 import com.teamflow.common.exception.BusinessException;
 import com.teamflow.framework.datascope.DataScope;
 import com.teamflow.framework.datascope.DataScopeContext;
@@ -12,7 +10,7 @@ import com.teamflow.project.mapper.ProjectMapper;
 import com.teamflow.project.mapper.ProjectMilestoneMapper;
 import com.teamflow.project.mapper.ProjectPlatformMapper;
 import com.teamflow.project.stage.ProjectStatusMachine;
-import com.teamflow.task.service.TaskService;
+import com.teamflow.task.service.TaskStatsQueryService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,7 +23,8 @@ import java.util.Map;
  * M14 里程碑服务（L0 2.5.1「里程碑：定义、计划/实际完成时间、完成度汇总」）。
  *
  * <p><b>R3 完成度不可手填</b>：完成度 = 里程碑所关联 KR 的**顶层任务完成率**，由本服务经
- * **M03 的 {@link TaskService#list}** 实时统计（不直连任务表、不在本模块落任务快照）；
+ * **M03 的 {@link TaskStatsQueryService#taskStatsByKrIds}** 聚合端口实时统计（不直连任务表、不在本模块落任务快照、
+ * 且该端口不叠加登录用户数据范围——同一里程碑完成度对不同账号一致，D-2026-10-26-09 结论二）；
  * 未绑定 KR 时完成度返回 {@code null} 并注明原因，接口不接受手填完成度字段。</p>
  *
  * <p><b>R7 延期判定口径唯一</b>：本类 {@link #isDelayed} 是唯一实现——「计划完成日期早于今天且
@@ -34,23 +33,21 @@ import java.util.Map;
 @Service
 public class ProjectMilestoneService extends ProjectServiceSupport {
 
-    private static final int TASK_PAGE_SIZE = 100;
-    private static final int TASK_MAX_PAGES = 5;
 
     private final ProjectMilestoneMapper milestoneMapper;
     private final ProjectMapper projectMapper;
-    private final TaskService taskService;
+    private final TaskStatsQueryService taskStatsQueryService;
 
     public ProjectMilestoneService(
             ProjectPlatformMapper platformMapper,
             ProjectMilestoneMapper milestoneMapper,
             ProjectMapper projectMapper,
-            TaskService taskService
+            TaskStatsQueryService taskStatsQueryService
     ) {
         super(platformMapper);
         this.milestoneMapper = milestoneMapper;
         this.projectMapper = projectMapper;
-        this.taskService = taskService;
+        this.taskStatsQueryService = taskStatsQueryService;
     }
 
     @DataScope
@@ -254,51 +251,27 @@ public class ProjectMilestoneService extends ProjectServiceSupport {
     }
 
     /**
-     * 里程碑完成度：经 M03 {@link TaskService#list} 按 KR 统计顶层任务（子任务不计）完成率。
+     * 里程碑完成度：经 M03 {@link TaskStatsQueryService#taskStatsByKrIds} **聚合端口**按 KR 统计顶层任务完成率。
      *
-     * <p>TaskService 自带数据范围过滤；单次最多读取 5 页 × 100 条，超出时 {@code sampled=true}
-     * 并以样本近似（RULE §九 已登记）。</p>
+     * <p>该端口刻意不叠加登录用户数据范围（D-2026-10-26-09 结论二），因此同一里程碑在不同数据范围账号下
+     * 看到同一数值；端口只返回聚合数值、不返回任务明细，业务对象访问权由本服务在调用前完成校验。</p>
      */
     private Map<String, Object> taskSummary(Long krId) {
         if (krId == null) {
             return summary(false, 0, 0, false, "未绑定 KR：完成度无法汇总（R3 完成度不可手填）");
         }
-        long total = 0;
-        long done = 0;
-        long fetched = 0;
-        boolean sampled = false;
-        for (int page = 1; page <= TASK_MAX_PAGES; page++) {
-            PageResult<Map<String, Object>> pageResult = taskService.list(
-                    new PageQuery(page, TASK_PAGE_SIZE, null, null), null, null, null, krId, null);
-            List<Map<String, Object>> rows = pageResult.rows();
-            if (rows == null || rows.isEmpty()) {
-                break;
-            }
-            for (Map<String, Object> task : rows) {
-                fetched++;
-                if (task.get("parentTaskId") != null) {
-                    continue;
-                }
-                total++;
-                if ("done".equals(String.valueOf(task.get("status")))) {
-                    done++;
-                }
-            }
-            if (rows.size() < TASK_PAGE_SIZE) {
-                break;
-            }
-            if (page == TASK_MAX_PAGES) {
-                sampled = pageResult.total() > (long) TASK_PAGE_SIZE * TASK_MAX_PAGES;
-            }
-        }
+        List<Map<String, Object>> stats = taskStatsQueryService.taskStatsByKrIds(List.of(krId));
+        Map<String, Object> stat = stats.isEmpty() ? null : stats.get(0);
+        long total = stat == null ? 0 : longOf(stat.get("taskTotal"));
+        long done = stat == null ? 0 : longOf(stat.get("taskDone"));
         if (total == 0) {
-            return summary(true, 0, 0, sampled, "该 KR 暂无关联顶层任务：完成度无数据（不显示 0%）");
+            return summary(true, 0, 0, false, "该 KR 暂无关联顶层任务：完成度无数据（不显示 0%）");
         }
-        java.math.BigDecimal completion = percent(java.math.BigDecimal.valueOf(done),
-                java.math.BigDecimal.valueOf(total));
-        Map<String, Object> result = summary(true, total, done, sampled,
-                sampled ? "任务超过采样上限（500 条），完成度为样本近似" : null);
-        result.put("completion", completion);
+        Map<String, Object> result = summary(true, total, done, false, null);
+        Object completion = stat.get("completionPercent");
+        result.put("completion", completion == null
+                ? percent(java.math.BigDecimal.valueOf(done), java.math.BigDecimal.valueOf(total))
+                : completion);
         return result;
     }
 

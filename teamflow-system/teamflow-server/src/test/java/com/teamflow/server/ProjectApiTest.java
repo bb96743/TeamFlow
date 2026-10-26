@@ -12,8 +12,13 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import com.teamflow.task.service.TaskStatsQueryService;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
 
+import java.sql.PreparedStatement;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -55,11 +60,16 @@ class ProjectApiTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private TaskStatsQueryService taskStatsQueryService;
+
     private final List<Long> createdPeriodIds = new ArrayList<>();
     private final List<Long> createdObjectiveIds = new ArrayList<>();
     private final List<Long> createdKrIds = new ArrayList<>();
     private final List<Long> createdTaskIds = new ArrayList<>();
     private final List<Long> createdProjectIds = new ArrayList<>();
+    private final List<Long> createdDeptIds = new ArrayList<>();
+    private final List<Long> createdUserIds = new ArrayList<>();
 
     // ------------------------------------------------------------------
     // ① 立项 → 关联目标 → 里程碑（M03 完成度）→ 状态流转 → 归档只读
@@ -362,6 +372,63 @@ class ProjectApiTest {
     }
 
     // ------------------------------------------------------------------
+    // ⑤ M14 口径修复：受限数据范围账号与管理员看到的里程碑完成度必须一致
+    //    （D-2026-10-26-09 结论二：聚合端口刻意不叠加登录用户数据范围）
+    // ------------------------------------------------------------------
+
+    @Test
+    void milestoneCompletionIsConsistentForRestrictedDataScope() {
+        HttpHeaders admin = adminHeaders();
+        String suffix = nextSuffix();
+        Long objectiveId = createObjectiveFixture(admin, suffix, "M14 口径目标" + suffix);
+        Long krId = createQuantitativeKr(admin, objectiveId, 100, 40);
+
+        // 独立部门 + DEPT 数据范围账号（部门=项目部门 → 可看项目；任务归属 admin 部门 → 旧实现会因任务范围过滤而偏低）
+        Long deptId = createDept(admin, suffix);
+        TestUser restricted = createRestrictedUser(deptId, 3L, suffix);
+
+        Long projectId = createProject(admin, "PSC-" + suffix, "受限口径项目" + suffix, objectiveId, 1L, deptId,
+                "2026-10-01", "2026-12-31");
+        assertThat(put(admin, "/api/project/projects/" + projectId + "/status",
+                Map.of("status", "active")).getStatusCode()).isEqualTo(HttpStatus.OK);
+        Long milestoneId = createMilestone(admin, projectId, "口径里程碑" + suffix, krId, "2026-10-01", "2026-12-31");
+
+        Long task1 = createTask(admin, "口径任务1-" + suffix, krId, "2026-12-31");
+        Long task2 = createTask(admin, "口径任务2-" + suffix, krId, "2026-12-31");
+        createTask(admin, "口径任务3-" + suffix, krId, "2026-12-31");
+        completeTask(admin, task1);
+        completeTask(admin, task2);
+
+        // 管理员视角
+        Map<String, Object> adminView = dataOf(get(admin,
+                "/api/project/projects/" + projectId + "/milestones/" + milestoneId));
+        double adminCompletion = decimalValue(adminView, "completion");
+
+        // DEPT 数据范围受限账号视角
+        HttpHeaders restrictedHeaders = bearerHeaders(login(restricted.username(), "admin123"));
+        Map<String, Object> restrictedView = dataOf(get(restrictedHeaders,
+                "/api/project/projects/" + projectId + "/milestones/" + milestoneId));
+        double restrictedCompletion = decimalValue(restrictedView, "completion");
+
+        System.out.println("[M14口径对比] admin(ALL)=" + adminCompletion + ", restricted(DEPT, deptId=" + deptId + ")=" + restrictedCompletion);
+        assertThat(adminCompletion).as("管理员视角完成度 = 2/3").isEqualTo(66.67);
+        assertThat(restrictedCompletion)
+                .as("受限数据范围账号与管理员看到的里程碑完成度必须一致（本次修复核心）")
+                .isEqualTo(adminCompletion);
+        assertThat(longOf(restrictedView, "taskTotal")).isEqualTo(3);
+        assertThat(longOf(restrictedView, "taskDone")).isEqualTo(2);
+
+        // 聚合端口：只返回 4 个聚合字段；且不叠加登录用户数据范围（测试线程无登录上下文，若叠加 scope 会返回 0/0）
+        List<Map<String, Object>> stats = taskStatsQueryService.taskStatsByKrIds(List.of(krId));
+        assertThat(stats).hasSize(1);
+        assertThat(stats.get(0).keySet())
+                .as("聚合端口不得返回任何任务明细字段")
+                .containsExactlyInAnyOrder("krId", "taskTotal", "taskDone", "completionPercent");
+        assertThat(longOf(stats.get(0), "taskTotal")).isEqualTo(3);
+        assertThat(longOf(stats.get(0), "taskDone")).isEqualTo(2);
+        assertThat(decimalValue(stats.get(0), "completionPercent")).isEqualTo(66.67);
+    }
+    // ------------------------------------------------------------------
     // 造数辅助（真实 HTTP：M02 目标/KR + M03 任务）
     // ------------------------------------------------------------------
 
@@ -452,6 +519,42 @@ class ProjectApiTest {
         return idOf(post(headers, "/api/project/projects/" + projectId + "/milestones", body));
     }
 
+    /** 建独立测试部门（system API），供数据范围用例使用。 */
+    private Long createDept(HttpHeaders headers, String suffix) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("parentId", 0L);
+        body.put("name", "M14口径测试部" + suffix);
+        body.put("sort", 98);
+        body.put("status", 1);
+        Long deptId = idOf(post(headers, "/api/system/depts", body));
+        createdDeptIds.add(deptId);
+        return deptId;
+    }
+
+    /** 建 DEPT 数据范围受限账号（JDBC 直插，密码哈希复用 admin；role 3 = 业务管理员 DEPT）。 */
+    private TestUser createRestrictedUser(Long deptId, Long roleId, String suffix) {
+        String username = "m03_it_" + suffix + "_" + SEQ.incrementAndGet();
+        String passwordHash = jdbcTemplate.queryForObject("SELECT password FROM sys_user WHERE id = 1", String.class);
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcTemplate.update(connection -> {
+            PreparedStatement statement = connection.prepareStatement(
+                    "INSERT INTO sys_user (username, password, nickname, dept_id, status, create_by, update_by) "
+                            + "VALUES (?, ?, ?, ?, 1, 'system', 'system')",
+                    Statement.RETURN_GENERATED_KEYS);
+            statement.setString(1, username);
+            statement.setString(2, passwordHash);
+            statement.setString(3, "M03口径测试用户" + suffix);
+            statement.setLong(4, deptId);
+            return statement;
+        }, keyHolder);
+        Long userId = keyHolder.getKey().longValue();
+        createdUserIds.add(userId);
+        jdbcTemplate.update("INSERT INTO sys_user_role (user_id, role_id) VALUES (?, ?)", userId, roleId);
+        return new TestUser(userId, username);
+    }
+
+    private record TestUser(Long id, String username) {
+    }
     // ------------------------------------------------------------------
     // 自清理（M14 + 本用例造的 M02/M03 数据）
     // ------------------------------------------------------------------
@@ -486,6 +589,11 @@ class ProjectApiTest {
                 deleteByIds("DELETE FROM proj_member WHERE project_id IN (%s)", createdProjectIds);
                 deleteByIds("DELETE FROM proj_project WHERE id IN (%s)", createdProjectIds);
             }
+            if (!createdUserIds.isEmpty()) {
+                deleteByIds("DELETE FROM sys_user_role WHERE user_id IN (%s)", createdUserIds);
+                deleteByIds("DELETE FROM sys_user WHERE id IN (%s)", createdUserIds);
+            }
+            deleteByIds("DELETE FROM sys_dept WHERE id IN (%s)", createdDeptIds);
         } catch (RuntimeException ignored) {
             // 清理失败不掩盖真实断言错误
         }
@@ -494,6 +602,8 @@ class ProjectApiTest {
         createdKrIds.clear();
         createdTaskIds.clear();
         createdProjectIds.clear();
+        createdDeptIds.clear();
+        createdUserIds.clear();
     }
 
     private void deleteByIds(String sqlTemplate, List<Long> ids) {

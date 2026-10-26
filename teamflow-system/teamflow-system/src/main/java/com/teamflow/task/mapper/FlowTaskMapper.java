@@ -69,6 +69,35 @@ public interface FlowTaskMapper {
             """)
     List<Map<String, Object>> selectTasksByInstance(@Param("instanceId") Long instanceId);
 
+    /**
+     * 某审批人当前的待办审批任务（通用审批出口 {@code ApprovalFlowService#myPending} 用）。
+     *
+     * <p>只返回流程引擎自身的待办事实（实例标题/类型/节点/状态），不叠加数据范围：审批人必须能看到
+     * 自己待办对应业务标题；业务对象的访问权由调用方保证。</p>
+     */
+    @Select("""
+            SELECT t.id,
+                   t.instance_id AS instanceId,
+                   t.biz_id AS bizId,
+                   t.node_key AS nodeKey,
+                   t.task_title AS taskTitle,
+                   t.assignee_id AS assigneeId,
+                   u.nickname AS assigneeName,
+                   i.instance_type AS instanceType,
+                   i.biz_title AS bizTitle,
+                   i.status AS instanceStatus,
+                   DATE_FORMAT(t.create_time, '%Y-%m-%d %H:%i') AS createTime
+            FROM flow_task t
+            JOIN flow_instance i ON i.id = t.instance_id AND i.deleted = 0
+            LEFT JOIN sys_user u ON u.id = t.assignee_id
+            WHERE t.assignee_id = #{approverId}
+              AND t.status = 'pending'
+              AND t.deleted = 0
+              AND i.status = 'running'
+            ORDER BY t.id DESC
+            """)
+    List<Map<String, Object>> selectPendingByAssignee(@Param("approverId") Long approverId);
+
     @Update("""
             UPDATE flow_task
             SET status = #{status},
