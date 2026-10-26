@@ -53,3 +53,6 @@ application-prod.yml
 
 # ---- Redis 本地落盘（从项目目录启动时会在 cwd 生成）----
 dump.rdb
+
+# G-1 文件上传的本地存储根目录（运行时产物，不入库）
+teamflow-system/data/

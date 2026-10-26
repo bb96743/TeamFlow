@@ -151,16 +151,27 @@ public interface RecruitOfferMapper {
             """)
     int updateOffer(@Param("id") Long id, @Param("row") Map<String, Object> row, @Param("operator") String operator);
 
+    /**
+     * 更新 Offer 状态与审批信息。
+     *
+     * <p><b>时间字段按「非空才更新」处理</b>：{@code sent_time} / {@code accepted_time} /
+     * {@code declined_reason} 只在本次确实需要写入时才覆盖。
+     * 早先的实现是无条件 {@code SET sent_time = #{sentTime}}，导致「登记答复」「入职」
+     * 等不涉及发送时间的流转把先前 {@code send()} 写入的发送时间冲成 null
+     * （M08 前端联调时发现：Offer 答复后「发送时间」丢失）。</p>
+     */
     @Update("""
+            <script>
             UPDATE recruit_offer
             SET status = #{status},
                 approval_state = #{approvalState},
                 approval_instance_id = #{approvalInstanceId},
-                sent_time = #{sentTime},
-                accepted_time = #{acceptedTime},
-                declined_reason = #{declinedReason},
                 update_by = #{operator}
+                <if test="sentTime != null">, sent_time = #{sentTime}</if>
+                <if test="acceptedTime != null">, accepted_time = #{acceptedTime}</if>
+                <if test="declinedReason != null">, declined_reason = #{declinedReason}</if>
             WHERE id = #{id} AND deleted = 0
+            </script>
             """)
     int updateOfferStatus(
             @Param("id") Long id,
