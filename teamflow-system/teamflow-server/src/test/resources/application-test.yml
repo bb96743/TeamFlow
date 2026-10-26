@@ -33,8 +33,20 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+  # M12：MCP Server（streamable HTTP，端点 /mcp）；显式声明协议以满足自动配置条件
+  ai:
+    mcp:
+      server:
+        name: teamflow-mcp
+        version: 1.0.0
 
 logging:
   level:
     root: info
     com.teamflow: info
+
+# M12 集成与开放：测试库专用凭据加密密钥（32 字节；仅 teamflow_test 使用，不用于任何真实环境）
+teamflow:
+  integration:
+    credential-key: "base64:VGVhbUZsb3dUZXN0Q3JlZGVudGlhbEtleTMyQnl0ZSE="
+    check-timeout-seconds: 2
