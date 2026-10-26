@@ -1,0 +1,6 @@
+# deploy 目录局部忽略规则（不修改仓库根 .gitignore）
+.env
+logs/
+backup/
+mysql-data/
+redis-data/

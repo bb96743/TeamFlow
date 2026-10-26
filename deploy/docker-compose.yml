@@ -1,0 +1,150 @@
+# ============================================================================
+# TeamFlow 私有化部署 · Docker Compose
+# ============================================================================
+# ⚠️ 诚实声明（必读）：
+#   本文件由开发机（Windows）编写，**该机器未安装 Docker / Docker Compose**，
+#   因此**本 Compose 路径未经过实际运行验证**。首次部署请按 deploy/README.md
+#   「Docker 路径验证清单」逐项核对，并在测试环境先跑通再上生产。
+#
+# 组成：MySQL 8.0 + Redis 7 + 后端（Spring Boot JAR）+ 前端（Nginx 静态托管 + /api 反代）
+# 数据：Flyway 在后端启动时自动建表（V1→V39，空库全量迁移），无需手工执行 SQL
+# 使用：
+#   1) cp deploy/.env.example deploy/.env 并填写（JWT_SECRET / DB_PASSWORD 必填）
+#   2) 构建前端产物：cd teamflow-vue && npm ci && npm run build
+#   3) 构建后端 JAR：cd teamflow-system && mvn -B -DskipTests clean package
+#   4) cd deploy && docker compose --env-file .env up -d --build
+#   5) 访问 http://<host>:${WEB_PORT}（默认 8080），健康检查 GET /api/health
+# ============================================================================
+
+name: teamflow
+
+services:
+  # --------------------------------------------------------------------------
+  # MySQL 8.0：数据持久化到 mysql-data 卷；健康检查通过后后端才启动
+  # --------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: teamflow-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in deploy/.env}
+      MYSQL_DATABASE: ${DB_NAME:-teamflow}
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --default-time-zone=+08:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 初始化脚本目录（可选）：后端 Flyway 会自动建库表，一般留空即可。
+      # 如需额外初始化 SQL，放在 deploy/docker/mysql-init/ 并取消下一行注释：
+      # - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    # 仅调试需要时暴露到宿主机（生产建议注释掉，仅容器网络内访问）
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+
+  # --------------------------------------------------------------------------
+  # Redis 7：JWT 会话与验证码存储（必需，无内存降级）
+  # 未对外暴露端口；生产如需口令，在 .env 设置 REDIS_PASSWORD（启动命令会自动追加 --requirepass）
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: teamflow-redis
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - "exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass \"$${REDIS_PASSWORD}\"}"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+-a \"$${REDIS_PASSWORD}\"} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # 后端：Spring Boot 可执行 JAR（含 Flyway 迁移脚本）
+  # 启动时自动迁移数据库；迁移失败则容器启动失败（不带病运行）
+  # --------------------------------------------------------------------------
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+    image: teamflow/backend:latest
+    container_name: teamflow-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in deploy/.env}
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-teamflow}
+      DB_USERNAME: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_TIMEZONE: ${DB_TIMEZONE:-+08:00}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # 文件上传：容器内固定挂载点，持久化到 teamflow-files 卷
+      TEAMFLOW_FILE_STORAGE_PATH: /data/uploads
+      TEAMFLOW_FILE_MAX_SIZE: ${TEAMFLOW_FILE_MAX_SIZE:-20MB}
+      TEAMFLOW_FILE_MAX_SWALLOW: ${TEAMFLOW_FILE_MAX_SWALLOW:-30MB}
+      # M11 AI 助手（默认纯规则、无外部依赖；启用 Ollama 需把地址指向宿主机）
+      AI_INTENT_RESOLVER: ${AI_INTENT_RESOLVER:-rule}
+      AI_LLM_ENABLED: ${AI_LLM_ENABLED:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-qwen2.5:7b}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-20}
+      AI_MAX_TOOL_ROUNDS: ${AI_MAX_TOOL_ROUNDS:-3}
+      AI_MAX_CITATIONS: ${AI_MAX_CITATIONS:-5}
+      AI_MAX_CONTEXT_CHARS: ${AI_MAX_CONTEXT_CHARS:-4000}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - teamflow-files:/data/uploads
+      - teamflow-logs:/app/logs
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # --------------------------------------------------------------------------
+  # 前端：Nginx 静态托管 dist + /api 反向代理到后端
+  # 构建前需先执行 npm run build 产出 teamflow-vue/dist
+  # --------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    image: teamflow/frontend:latest
+    container_name: teamflow-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  mysql-data:
+  redis-data:
+  teamflow-files:
+  teamflow-logs:
