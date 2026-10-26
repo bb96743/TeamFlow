@@ -41,15 +41,55 @@
         <!-- 1A 阶段刻意保持 17：JDK 21 可编译，先隔离"Boot 4"这一个变量；JDK 25 见 T1.5-1 -->
         <java.version>17</java.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
+        <!-- Spring AI 2.0.0：本机 ~/.m2 已缓存全套，可离线构建（D-2026-10-27-12 结论一） -->
+        <spring-ai.version>2.0.0</spring-ai.version>
         <knife4j.version>5.7.9</knife4j.version>
         <springdoc.version>3.0.3</springdoc.version>
         <jjwt.version>0.12.6</jjwt.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <!-- 本机只缓存了 micrometer 1.17.1（Boot 4.0.8 默认 1.16.7 缺失），
+             统一抬高到已缓存版本，避免 Spring AI 依赖在离线环境因缺 jar 失败 -->
+        <micrometer.version>1.17.1</micrometer.version>
     </properties>
+
+    <!-- 部分 Spring AI 构件在本机是从 huaweicloud 镜像缓存的；显式声明该仓库 id，
+         使 Maven 离线模式能识别本地缓存来源（不改变实际下载源） -->
+    <repositories>
+        <repository>
+            <id>huaweicloud</id>
+            <url>https://repo.huaweicloud.com/repository/maven/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Spring AI BOM 统一版本；模型实现按需引入，缺模型时走规则实现 -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- 本机只缓存 reactor-core 3.8.7 / kotlin 2.3.21；显式钉版本，保证 Spring AI 2.0 传递依赖可离线解析 -->
+            <dependency>
+                <groupId>io.projectreactor</groupId>
+                <artifactId>reactor-core</artifactId>
+                <version>3.8.7</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib</artifactId>
+                <version>2.3.21</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-reflect</artifactId>
+                <version>2.3.21</version>
+            </dependency>
             <dependency>
                 <groupId>com.teamflow</groupId>
                 <artifactId>teamflow-common</artifactId>

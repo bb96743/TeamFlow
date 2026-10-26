@@ -27,5 +27,16 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!-- M11：Spring AI 2.0 对话客户端（ChatClient）；工具调用循环由本模块 ToolRouter 执行 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+        </dependency>
+        <!-- M11：Ollama 模型实现。默认不启用；配置 teamflow.ai.llm-enabled=true 时由本模块手工构建
+             ChatModel/ChatClient（不依赖 starter 自动装配，避免引入 Boot 4.1 starter 版本冲突） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-ollama</artifactId>
+        </dependency>
     </dependencies>
 </project>

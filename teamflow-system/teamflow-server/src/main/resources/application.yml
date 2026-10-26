@@ -74,6 +74,19 @@ teamflow:
       - aspx
     allowed-extensions: []
 
+  # M11 AI 助手（D-2026-10-27-12）：默认规则意图识别，无外部依赖；
+  # 配置 llm-enabled=true 且本机有 Ollama 模型时，resolver=llm 走 Spring AI ChatClient，
+  # 调用失败会自动回落规则实现。真实模型推理未在本机验证（无模型/无 Key）。
+  ai:
+    resolver: ${AI_INTENT_RESOLVER:rule}
+    llm-enabled: ${AI_LLM_ENABLED:false}
+    ollama-base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    ollama-model: ${OLLAMA_CHAT_MODEL:qwen2.5:7b}
+    timeout-seconds: ${AI_TIMEOUT_SECONDS:20}
+    max-tool-rounds: ${AI_MAX_TOOL_ROUNDS:3}
+    max-citations: ${AI_MAX_CITATIONS:5}
+    max-context-chars: ${AI_MAX_CONTEXT_CHARS:4000}
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
