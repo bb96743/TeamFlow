@@ -53,7 +53,7 @@ TeamFlow 用一条可验证的价值链把这些问题串起来：
 | **M4** | AI 与开放 | M11 AI 助手、M12 集成与开放 | ⚠️ **基本达成**：MCP 7 只读工具、开放 API + Key 管理、RAG 溯源；**写操作工具未做** |
 | **M5** | 打磨交付 | 全模块 | ⚠️ **主体达成**：性能压测（真实基线 + N+1 根因定位）、私有化部署（传统路径实测/Docker 未验证）、前端收敛至 55 页 |
 
-**当前规模**：**90 张表**（`V1`–`V39` 版本化迁移）· 后端 **200+ 个业务接口** · 前端 **55 个页面**（业务 45 + 平台 10） · 后端 **190** 个测试用例 · 前端 **21** 个测试用例 · GitHub Actions 自动门禁。
+**当前规模**：**95 张表**（`V1`–`V43` 版本化迁移）· 后端 **200+ 个业务接口** · 前端 **56 个页面**（业务 45 + 平台 11） · 后端 **197** 个测试用例 · 前端 **21** 个测试用例 · GitHub Actions 自动门禁。
 
 **已经可以做的**（登录后即可验证）：
 
@@ -338,15 +338,15 @@ TeamFlow/
 | 门禁 | 命令 | 标准 |
 | --- | --- | --- |
 | 后端编译 | `mvn -DskipTests clean package` | 六模块 SUCCESS |
-| 后端测试 | `mvn -pl teamflow-server -am test` | **190 个用例全绿**（跑独立库 `teamflow_test`，需 MySQL + Redis + `JWT_SECRET`） |
+| 后端测试 | `mvn -pl teamflow-server -am test` | **197 个用例全绿**（跑独立库 `teamflow_test`，需 MySQL + Redis + `JWT_SECRET`） |
 | 框架级测试 | `mvn -pl teamflow-framework -am test` | 不依赖中间件，可离线跑 |
 | 前端类型检查与构建 | `npm run build` | `vue-tsc --noEmit` 通过 + 打包成功 |
 | 前端单测 | `npm run test:unit` | **21 个用例全绿**（可离线跑） |
-| **CI（推荐）** | 推送即触发 `.github/workflows/ci.yml` | 后端 190 例 + 前端 21 例 + build，两个 job 并行；失败自动留诊断注解 |
+| **CI（推荐）** | 推送即触发 `.github/workflows/ci.yml` | 后端 197 例 + 前端 21 例 + build，两个 job 并行；失败自动留诊断注解 |
 | 本地等价 CI | `powershell -File scripts/ci-local.ps1` | 不依赖 GitHub，本机一键跑完全部门禁（约 60 秒） |
 | 浏览器回归 | `python scripts/session-regression.py` | 需前后端均启动 + Playwright |
 
-当前基线：后端 **34 个测试类 / 190 个用例**，前端 **9 个测试文件 / 21 个用例**。
+当前基线：后端 **37 个测试类 / 197 个用例**，前端 **9 个测试文件 / 21 个用例**。
 
 > **CI 的额外价值**：GitHub Actions 在**全新空库**上跑测试，Flyway 需从 `V1` 迁移到 `V17` 建立 45 张表——这同时验证了「干净机器可一次性拉起」与迁移脚本的完整性（本地库是演进而来，无法覆盖该场景）。
 
