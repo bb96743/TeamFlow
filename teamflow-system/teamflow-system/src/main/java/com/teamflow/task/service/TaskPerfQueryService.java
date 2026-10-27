@@ -5,8 +5,10 @@ import com.teamflow.task.mapper.TaskMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * M03 对 M05 绩效的**只读任务事实取数端口**。
@@ -45,6 +47,36 @@ public class TaskPerfQueryService {
             throw new BusinessException("绩效归集取数必须提供周期起止日期");
         }
         return taskMapper.selectPerfTopLevelTasks(assigneeId, startDate.toString(), endDate.toString());
+    }
+
+    /**
+     * 批量取某批责任人在给定日期范围内的顶层任务事实（M13 洞察聚合用，避免逐成员 N+1）。
+     *
+     * <p>筛选条件、排序与单条版本 {@link #topLevelTaskFacts(Long, LocalDate, LocalDate)} 完全一致：
+     * 顶层任务、未删除、{@code due_date} 落在区间内（为空时按创建日期），按任务 ID 升序。
+     * 空集合早返回，不产生 SQL。</p>
+     *
+     * @param assigneeIds 责任人用户 ID 集合（可含 null/重复，内部去重）
+     * @param startDate   统计开始日期
+     * @param endDate     统计结束日期
+     * @return 任务事实（含 assigneeId，供调用方按用户分组）
+     */
+    public List<Map<String, Object>> topLevelTaskFactsBatch(Collection<Long> assigneeIds,
+                                                           LocalDate startDate, LocalDate endDate) {
+        if (assigneeIds == null || assigneeIds.isEmpty()) {
+            return List.of();
+        }
+        if (startDate == null || endDate == null) {
+            throw new BusinessException("绩效归集取数必须提供周期起止日期");
+        }
+        List<Long> userIds = assigneeIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (userIds.isEmpty()) {
+            return List.of();
+        }
+        return taskMapper.selectPerfTopLevelTasksBatch(userIds, startDate.toString(), endDate.toString());
     }
 
     /**

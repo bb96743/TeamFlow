@@ -35,7 +35,7 @@ import java.util.Map;
  * 再逐成员调用上游端口，普通成员看不到范围外数据。</p>
  *
  * <p><b>性能与缓存（R5）</b>：本期实时聚合、不缓存（字典 {@code cache_ttl_seconds=0}），
- * 统计区间上限 366 天，成员维度逐人取数；成员规模很大时应改为快照/缓存（回退条件已登记在 RULE §九）。</p>
+ * 统计区间上限 366 天；成员维度**一次批量取数后按用户分组**（D-2026-10-27-14），不再逐人查库。</p>
  */
 @Service
 public class InsightTaskStatsService extends InsightServiceSupport {
@@ -87,11 +87,22 @@ public class InsightTaskStatsService extends InsightServiceSupport {
         long krCount = 0;
         BigDecimal krProgressSum = BigDecimal.ZERO;
 
+        // D-2026-10-27-14：先按成员集合批量取全部事实（2 条 SQL），再按 userId 分组；
+        // 分组后逐成员统计逻辑与单条版本完全一致，避免 23 成员 × 2 次的 N+1。
+        List<Long> participantIds = participants.stream()
+                .map(participant -> numberAsLong(participant.get("id")))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        Map<Long, List<Map<String, Object>>> taskFactsByUser = groupRowsByUser(
+                taskPerfQueryService.topLevelTaskFactsBatch(participantIds, start, end), "assigneeId");
+        Map<Long, List<Map<String, Object>>> krFactsByUser = groupRowsByUser(
+                okrKeyResultService.perfFactsBatch(participantIds, start, end), "ownerId");
+
         for (Map<String, Object> user : participants) {
             Long userId = numberAsLong(user.get("id"));
-            List<Map<String, Object>> tasks = taskPerfQueryService.topLevelTaskFacts(userId, start, end);
+            List<Map<String, Object>> tasks = taskFactsByUser.getOrDefault(userId, List.of());
             allTasks.addAll(tasks);
-            List<Map<String, Object>> krs = okrKeyResultService.perfFacts(userId, start, end);
+            List<Map<String, Object>> krs = krFactsByUser.getOrDefault(userId, List.of());
 
             long memberDone = 0;
             long memberOnTime = 0;
@@ -218,6 +229,21 @@ public class InsightTaskStatsService extends InsightServiceSupport {
         return result;
     }
 
+    /** 批量结果按用户分组成「userId → 该用户的行」，行内保持批量 SQL 的原始顺序。 */
+    private Map<Long, List<Map<String, Object>>> groupRowsByUser(
+            List<Map<String, Object>> rows, String userIdField) {
+        Map<Long, List<Map<String, Object>>> grouped = new LinkedHashMap<>();
+        if (rows == null || rows.isEmpty()) {
+            return grouped;
+        }
+        for (Map<String, Object> row : rows) {
+            Long userId = numberAsLong(row.get(userIdField));
+            if (userId != null) {
+                grouped.computeIfAbsent(userId, key -> new ArrayList<>()).add(row);
+            }
+        }
+        return grouped;
+    }
     // ------------------------------------------------------------------
     // 成员解析（R3）
     // ------------------------------------------------------------------

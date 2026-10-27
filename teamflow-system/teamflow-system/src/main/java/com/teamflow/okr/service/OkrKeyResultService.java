@@ -16,9 +16,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -323,6 +325,35 @@ public class OkrKeyResultService extends OkrServiceSupport {
             throw new BusinessException("归集取数必须提供绩效周期起止日期");
         }
         return keyResultMapper.selectPerfKrs(ownerId, startDate.toString(), endDate.toString());
+    }
+
+    /**
+     * 批量取某批负责人承接的 KR 归集事实（M13 洞察聚合用，避免逐成员 N+1）。
+     *
+     * <p>筛选条件、排序与单条版本 {@link #perfFacts(Long, LocalDate, LocalDate)} 完全一致：
+     * 同一日期重叠口径、顶层任务无关、校准字段相同；额外带出 {@code ownerId} 供调用方按用户分组。
+     * 空集合早返回，不产生 SQL。</p>
+     *
+     * @param ownerIds  KR 负责人用户 ID 集合（可含 null/重复，内部去重）
+     * @param startDate 绩效周期开始日期
+     * @param endDate   绩效周期结束日期
+     */
+    public List<Map<String, Object>> perfFactsBatch(Collection<Long> ownerIds,
+                                                    LocalDate startDate, LocalDate endDate) {
+        if (ownerIds == null || ownerIds.isEmpty()) {
+            return List.of();
+        }
+        if (startDate == null || endDate == null) {
+            throw new BusinessException("归集取数必须提供绩效周期起止日期");
+        }
+        List<Long> userIds = ownerIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (userIds.isEmpty()) {
+            return List.of();
+        }
+        return keyResultMapper.selectPerfKrsBatch(userIds, startDate.toString(), endDate.toString());
     }
 
     /**

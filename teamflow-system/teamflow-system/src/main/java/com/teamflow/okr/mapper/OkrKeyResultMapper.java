@@ -267,6 +267,57 @@ public interface OkrKeyResultMapper {
     );
 
     /**
+     * KR 归集批量取数（M13 洞察聚合用，只读）：与 {@link #selectPerfKrs} 同口径，
+     * 一次取回一批负责人的 KR 事实；每行额外带 {@code ownerId} 供调用方按用户分组。
+     */
+    @Select("""
+            <script>
+            SELECT k.id AS krId,
+                   k.objective_id AS objectiveId,
+                   o.objective_title AS objectiveTitle,
+                   o.period_id AS periodId,
+                   p.period_name AS periodName,
+                   k.kr_title AS krTitle,
+                   k.kr_type AS krType,
+                   k.progress,
+                   k.progress_source AS progressSource,
+                   k.task_count AS taskCount,
+                   k.done_task_count AS doneTaskCount,
+                   k.owner_id AS ownerId,
+                   (SELECT l.from_progress FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationFrom,
+                   (SELECT l.to_progress FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationTo,
+                   (SELECT l.reason FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationReason,
+                   (SELECT l.operator_name FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationOperator,
+                   (SELECT DATE_FORMAT(l.create_time, '%Y-%m-%d %H:%i:%s') FROM okr_progress_log l
+                     WHERE l.kr_id = k.id AND l.progress_source = 'manual' AND l.deleted = 0
+                     ORDER BY l.id DESC LIMIT 1) AS calibrationTime
+            FROM okr_key_result k
+            JOIN okr_objective o ON o.id = k.objective_id AND o.deleted = 0
+            JOIN okr_period p ON p.id = o.period_id AND p.deleted = 0
+            WHERE k.deleted = 0
+              AND k.owner_id IN
+              <foreach collection="ownerIds" item="ownerId" open="(" separator="," close=")">
+                  #{ownerId}
+              </foreach>
+              AND p.start_date &lt;= #{endDate}
+              AND p.end_date &gt;= #{startDate}
+            ORDER BY k.objective_id, k.sort, k.id
+            </script>
+            """)
+    List<Map<String, Object>> selectPerfKrsBatch(
+            @Param("ownerIds") List<Long> ownerIds,
+            @Param("startDate") String startDate,
+            @Param("endDate") String endDate
+    );
+    /**
      * 行级悲观锁（L0 §9.1 D-2026-10-25-06 D-06.4）：M02 事件订阅端在重算前锁住 KR 行，
      * 使同一 KR 的并发事件消费串行化，避免 A(1/2=50%) 覆盖 B(2/2=100%) 的交错。
      */

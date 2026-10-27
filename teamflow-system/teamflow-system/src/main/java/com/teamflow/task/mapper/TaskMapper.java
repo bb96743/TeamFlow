@@ -288,6 +288,41 @@ public interface TaskMapper {
     );
 
     /**
+     * 归集批量取数（M13 洞察聚合用，只读）：与 {@link #selectPerfTopLevelTasks} 同口径，
+     * 一次取回一批责任人的顶层任务事实；每行含 {@code assigneeId} 供调用方按用户分组。
+     */
+    @Select("""
+            <script>
+            SELECT t.id AS taskId,
+                   t.task_title AS taskTitle,
+                   t.status,
+                   t.kr_id AS krId,
+                   DATE_FORMAT(t.due_date, '%Y-%m-%d') AS dueDate,
+                   DATE_FORMAT(t.done_time, '%Y-%m-%d %H:%i') AS doneTime,
+                   t.assignee_id AS assigneeId
+            FROM task_task t
+            WHERE t.deleted = 0
+              AND t.assignee_id IN
+              <foreach collection="assigneeIds" item="assigneeId" open="(" separator="," close=")">
+                  #{assigneeId}
+              </foreach>
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_relation r
+                  WHERE r.task_id = t.id AND r.relation_type = 'subtask' AND r.deleted = 0
+              )
+              AND (
+                  (t.due_date IS NOT NULL AND t.due_date BETWEEN #{startDate} AND #{endDate})
+                  OR (t.due_date IS NULL AND DATE(t.create_time) BETWEEN #{startDate} AND #{endDate})
+              )
+            ORDER BY t.id
+            </script>
+            """)
+    List<Map<String, Object>> selectPerfTopLevelTasksBatch(
+            @Param("assigneeIds") List<Long> assigneeIds,
+            @Param("startDate") String startDate,
+            @Param("endDate") String endDate
+    );
+    /**
      * 成员负载取数（M04 团队模块用，只读）：按用户集合批量统计**顶层任务**的
      * 「任务总数 / 进行中数」。
      *
