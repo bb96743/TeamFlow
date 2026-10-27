@@ -35,6 +35,12 @@ public class AiProperties {
     /** 进入模型上下文的片段总字符上限（成本控制）。 */
     private int maxContextChars = 4000;
 
+    /** 智能提醒默认提前天数（任务到期前 N 天开始提醒）。 */
+    private int reminderDaysAhead = 3;
+
+    /** 任务分配建议的候选人数上限（一次批量取负载的用户数量）。 */
+    private int suggestionCandidateLimit = 20;
+
     public String getResolver() { return resolver; }
     public void setResolver(String resolver) { this.resolver = resolver; }
 
@@ -58,4 +64,10 @@ public class AiProperties {
 
     public int getMaxContextChars() { return maxContextChars; }
     public void setMaxContextChars(int maxContextChars) { this.maxContextChars = maxContextChars; }
+
+    public int getReminderDaysAhead() { return reminderDaysAhead; }
+    public void setReminderDaysAhead(int reminderDaysAhead) { this.reminderDaysAhead = reminderDaysAhead; }
+
+    public int getSuggestionCandidateLimit() { return suggestionCandidateLimit; }
+    public void setSuggestionCandidateLimit(int suggestionCandidateLimit) { this.suggestionCandidateLimit = suggestionCandidateLimit; }
 }

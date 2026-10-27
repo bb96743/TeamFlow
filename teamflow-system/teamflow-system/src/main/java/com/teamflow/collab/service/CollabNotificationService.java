@@ -10,6 +10,7 @@ import com.teamflow.common.exception.BusinessException;
 import com.teamflow.personal.todo.TodoBizTypes;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashMap;
@@ -81,8 +82,13 @@ public class CollabNotificationService extends CollabServiceSupport {
      *
      * <p>入参不允许裸 HTML；正文由模板渲染。需要进入个人待办收件箱时，只对已登记的
      * {@code collab_mention} 业务类型发布内部投递事件，由投递端经 M10 统一入口投递。</p>
+     *
+     * <p><b>独立事务（REQUIRES_NEW）</b>：通知投递是**独立副作用**，单条投递失败（如接收人已停用）
+     * 只回滚本条，不把调用方业务事务标记为 rollback-only，也不应让调用方因通知失败而整体 500。
+     * 该调整来自 P1-B 实测缺陷（M11 智能提醒扫描因单条失效接收人返回 500，
+     * {@code UnexpectedRollbackException: Transaction rolled back because it has been marked as rollback-only}）。</p>
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Map<String, Object> notifyInternal(InternalNotifyRequest request) {
         if (request == null || request.receiverId() == null) {
             throw new BusinessException("通知接收人不能为空");

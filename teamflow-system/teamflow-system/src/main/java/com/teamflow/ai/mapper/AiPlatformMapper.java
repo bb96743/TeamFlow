@@ -30,4 +30,10 @@ public interface AiPlatformMapper {
             LIMIT 1
             """)
     Map<String, Object> selectUserById(@Param("userId") Long userId);
+
+    @Select("SELECT id FROM sys_user WHERE username = #{username} AND deleted = 0 AND status = 1 LIMIT 1")
+    Long selectUserIdByUsername(@Param("username") String username);
+
+    @Select("SELECT COUNT(*) FROM sys_user WHERE id = #{userId} AND deleted = 0 AND status = 1")
+    long countActiveUser(@Param("userId") Long userId);
 }
