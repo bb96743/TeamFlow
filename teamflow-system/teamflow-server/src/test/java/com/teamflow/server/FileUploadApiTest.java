@@ -198,6 +198,60 @@ class FileUploadApiTest {
     }
 
     // ------------------------------------------------------------------
+    // ⑦ M5-7 列表能力：分页 + 原始名模糊搜索 + 业务类型筛选 + 引用数展示
+    // ------------------------------------------------------------------
+
+    @Test
+    void fileListSupportsPagingKeywordBizTypeAndRefCount() {
+        HttpHeaders headers = adminHeaders();
+        String suffix = uniqueSuffix();
+        String bizType = "it-list-" + suffix;
+        String alpha = "it-file-list-alpha-" + suffix + ".txt";
+        String beta = "it-file-list-beta-" + suffix + ".txt";
+
+        long alphaId = uploadWithBizType(headers, alpha, "alpha-content".getBytes(StandardCharsets.UTF_8), bizType);
+        uploadWithBizType(headers, beta, "beta-content".getBytes(StandardCharsets.UTF_8), null);
+
+        // 1) 关键词搜索：命中两条
+        Map<String, Object> byKeyword = dataOf(get(headers,
+                "/api/system/files?pageNum=1&pageSize=10&keyword=it-file-list-"));
+        assertThat(totalOf(byKeyword)).isEqualTo(2);
+        List<Map<String, Object>> rows = rowsOf(byKeyword);
+        assertThat(rows).extracting(row -> row.get("originalName")).containsExactlyInAnyOrder(alpha, beta);
+
+        Map<String, Object> alphaRow = rows.stream()
+                .filter(row -> alpha.equals(row.get("originalName"))).findFirst().orElseThrow();
+        assertThat(alphaRow).containsEntry("refCount", 0).containsEntry("bizType", bizType);
+        assertThat(String.valueOf(alphaRow.get("sizeText"))).endsWith(" B");
+        assertThat(String.valueOf(alphaRow.get("url"))).isEqualTo("/api/system/files/" + alphaId);
+        assertThat(String.valueOf(alphaRow.get("createBy"))).isEqualTo("admin");
+
+        // 2) 业务类型精确筛选：只命中 alpha
+        Map<String, Object> byBizType = dataOf(get(headers,
+                "/api/system/files?pageNum=1&pageSize=10&keyword=it-file-list-&bizType=" + bizType));
+        assertThat(totalOf(byBizType)).isEqualTo(1);
+        assertThat(rowsOf(byBizType)).extracting(row -> row.get("originalName")).containsExactly(alpha);
+
+        // 3) 分页：pageSize=1 时 total 仍为 2、rows 为 1
+        Map<String, Object> paged = dataOf(get(headers,
+                "/api/system/files?pageNum=1&pageSize=1&keyword=it-file-list-"));
+        assertThat(totalOf(paged)).isEqualTo(2);
+        assertThat(rowsOf(paged)).hasSize(1);
+
+        // 4) 引用中的文件：列表展示 refCount>0，且删除被后端拒绝
+        jdbcTemplate.update("UPDATE sys_file SET ref_count = 1 WHERE id = ?", alphaId);
+        Map<String, Object> withRef = dataOf(get(headers,
+                "/api/system/files?pageNum=1&pageSize=10&keyword=" + alpha));
+        assertThat(totalOf(withRef)).isEqualTo(1);
+        assertThat(rowsOf(withRef).get(0)).containsEntry("refCount", 1);
+
+        ResponseEntity<Map<String, Object>> blocked = delete(headers, alphaId);
+        assertThat(blocked.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(String.valueOf(blocked.getBody().get("message"))).contains("引用");
+        jdbcTemplate.update("UPDATE sys_file SET ref_count = 0 WHERE id = ?", alphaId);
+    }
+
+    // ------------------------------------------------------------------
     // 上传辅助
     // ------------------------------------------------------------------
 
@@ -248,6 +302,40 @@ class FileUploadApiTest {
     private ResponseEntity<Map<String, Object>> delete(HttpHeaders headers, long fileId) {
         return restTemplate.exchange("/api/system/files/" + fileId, HttpMethod.DELETE,
                 new HttpEntity<>(headers), MAP_TYPE);
+    }
+
+    private ResponseEntity<Map<String, Object>> get(HttpHeaders headers, String url) {
+        return restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), MAP_TYPE);
+    }
+
+    private long totalOf(Map<String, Object> page) {
+        return ((Number) page.get("total")).longValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> rowsOf(Map<String, Object> page) {
+        return (List<Map<String, Object>>) page.get("rows");
+    }
+
+    /** 上传并返回文件 ID；{@code bizType} 为空时不携带该参数。 */
+    private Long uploadWithBizType(HttpHeaders headers, String filename, byte[] content, String bizType) {
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("file", new ByteArrayResource(content) {
+            @Override
+            public String getFilename() {
+                return filename;
+            }
+        });
+        HttpHeaders requestHeaders = new HttpHeaders();
+        requestHeaders.putAll(headers);
+        requestHeaders.setContentType(MediaType.MULTIPART_FORM_DATA);
+        String url = bizType == null || bizType.isBlank()
+                ? "/api/system/files"
+                : "/api/system/files?bizType=" + bizType;
+        ResponseEntity<Map<String, Object>> response = restTemplate.exchange(url, HttpMethod.POST,
+                new HttpEntity<>(body, requestHeaders), MAP_TYPE);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return ((Number) dataOf(response).get("id")).longValue();
     }
 
     private HttpHeaders adminHeaders() {

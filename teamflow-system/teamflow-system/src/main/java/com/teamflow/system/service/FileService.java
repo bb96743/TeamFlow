@@ -1,5 +1,7 @@
 package com.teamflow.system.service;
 
+import com.teamflow.common.domain.PageQuery;
+import com.teamflow.common.domain.PageResult;
 import com.teamflow.common.exception.BusinessException;
 import com.teamflow.system.config.FileStorageProperties;
 import com.teamflow.system.domain.vo.FileDownload;
@@ -21,6 +23,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -159,6 +163,56 @@ public class FileService {
             log.warn("文件元数据已删除，但磁盘清理失败：id={} path={}", id, target, exception);
         }
         log.info("文件删除成功：id={}", id);
+    }
+
+    /**
+     * 分页查询文件（M5-7 列表能力，只读；不改动上传/下载/删除的既有语义）。
+     *
+     * <p><b>删除语义如实说明</b>：{@code sys_file} **没有 {@code deleted} 列**，G-1 的删除是
+     * **物理删除**（元数据行与磁盘文件一并清理，见 {@link #delete}），因此列表**无需任何软删过滤**——
+     * 查到的就是真实存在的文件。</p>
+     *
+     * @param query   分页参数（pageNum/pageSize；sortField/sortOrder 忽略，固定按 id 倒序）
+     * @param keyword 原始文件名模糊关键词（可空）
+     * @param bizType 业务类型精确筛选（可空）
+     * @return 分页结果；行内附带 {@code sizeText}（人类可读大小）与 {@code url}（鉴权下载地址）
+     */
+    public PageResult<Map<String, Object>> page(PageQuery query, String keyword, String bizType) {
+        PageQuery effective = query == null ? new PageQuery(null, null, null, null) : query;
+        int pageNum = effective.normalizedPageNum();
+        int pageSize = effective.normalizedPageSize();
+        int offset = (pageNum - 1) * pageSize;
+        String kw = trimToNull(keyword);
+        String bt = trimToNull(bizType);
+        long total = fileMapper.countFiles(kw, bt);
+        List<Map<String, Object>> rows = fileMapper.selectFiles(kw, bt, offset, pageSize);
+        rows.forEach(this::decorateListRow);
+        return PageResult.of(rows, total, pageNum, pageSize);
+    }
+
+    /** 列表行补充人类可读大小与统一下载地址（url 由 id 派生，不暴露磁盘路径）。 */
+    private void decorateListRow(Map<String, Object> row) {
+        row.put("sizeText", humanSize(numberAsLong(row.get("size"))));
+        Object id = row.get("id");
+        if (id != null) {
+            row.put("url", DOWNLOAD_URL_PREFIX + numberAsLong(id));
+        }
+    }
+
+    /** 字节数 → 人类可读大小（B/KB/MB/GB，保留 1 位小数）。 */
+    private String humanSize(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        double kilobytes = bytes / 1024.0;
+        if (kilobytes < 1024) {
+            return String.format(Locale.ROOT, "%.1f KB", kilobytes);
+        }
+        double megabytes = kilobytes / 1024.0;
+        if (megabytes < 1024) {
+            return String.format(Locale.ROOT, "%.1f MB", megabytes);
+        }
+        return String.format(Locale.ROOT, "%.1f GB", megabytes / 1024.0);
     }
 
     /** 引用计数 +1（业务模块关联附件时调用）。 */

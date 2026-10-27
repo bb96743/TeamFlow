@@ -1,5 +1,7 @@
 package com.teamflow.system.controller;
 
+import com.teamflow.common.domain.PageQuery;
+import com.teamflow.common.domain.PageResult;
 import com.teamflow.common.domain.R;
 import com.teamflow.framework.audit.OperLog;
 import com.teamflow.framework.security.RequiresPermission;
@@ -22,6 +24,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /**
  * 统一文件上传接口（G-1，M00 平台能力）。
@@ -55,6 +58,22 @@ public class FileController {
             @RequestParam(value = "bizId", required = false) Long bizId
     ) {
         return R.success(fileService.upload(file, bizType, bizId));
+    }
+
+    /**
+     * 文件列表（M5-7）：分页 + 原始名模糊搜索 + 业务类型筛选（只读）。
+     *
+     * <p>权限码 `system:file:list`（V12 已登记）。注意 {@code sys_file} 无 {@code deleted} 列，
+     * G-1 的删除是物理删除，因此列表只含真实存在的文件。</p>
+     */
+    @GetMapping("/files")
+    @RequiresPermission("system:file:list")
+    public R<PageResult<Map<String, Object>>> page(
+            PageQuery query,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "bizType", required = false) String bizType
+    ) {
+        return R.success(fileService.page(query, keyword, bizType));
     }
 
     @GetMapping("/files/{id}")

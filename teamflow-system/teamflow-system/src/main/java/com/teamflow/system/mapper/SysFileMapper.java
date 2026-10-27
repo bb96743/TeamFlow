@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -61,6 +62,62 @@ public interface SysFileMapper {
             WHERE id = #{id} AND ref_count > 0
             """)
     int decrementRef(@Param("id") Long id, @Param("operator") String operator);
+
+    /**
+     * 分页查询文件元数据（M5-7 列表能力；只读）。
+     *
+     * <p>说明：{@code sys_file} **没有 {@code deleted} 列**，G-1 的删除是**物理删除**
+     * （{@code deleteIfUnreferenced} 直接删行），因此这里无需任何软删过滤——
+     * 能被查到的就是真实存在的文件。</p>
+     */
+    @Select("""
+            <script>
+            SELECT id,
+                   original_name AS originalName,
+                   url,
+                   content_type AS contentType,
+                   size,
+                   biz_type AS bizType,
+                   biz_id AS bizId,
+                   ref_count AS refCount,
+                   storage_provider AS storageProvider,
+                   create_by AS createBy,
+                   DATE_FORMAT(create_time, '%Y-%m-%d %H:%i:%s') AS createTime
+            FROM sys_file
+            <where>
+                <if test="keyword != null and keyword != ''">
+                    AND original_name LIKE CONCAT('%', #{keyword}, '%')
+                </if>
+                <if test="bizType != null and bizType != ''">
+                    AND biz_type = #{bizType}
+                </if>
+            </where>
+            ORDER BY id DESC
+            LIMIT #{limit} OFFSET #{offset}
+            </script>
+            """)
+    List<Map<String, Object>> selectFiles(
+            @Param("keyword") String keyword,
+            @Param("bizType") String bizType,
+            @Param("offset") int offset,
+            @Param("limit") int limit
+    );
+
+    /** 与 {@link #selectFiles} 同条件的总数（分页用）。 */
+    @Select("""
+            <script>
+            SELECT COUNT(*) FROM sys_file
+            <where>
+                <if test="keyword != null and keyword != ''">
+                    AND original_name LIKE CONCAT('%', #{keyword}, '%')
+                </if>
+                <if test="bizType != null and bizType != ''">
+                    AND biz_type = #{bizType}
+                </if>
+            </where>
+            </script>
+            """)
+    long countFiles(@Param("keyword") String keyword, @Param("bizType") String bizType);
 
     /** 仅当引用计数归零时删除元数据（并发安全：条件更新，返回 0 表示已被引用或不存在）。 */
     @Delete("DELETE FROM sys_file WHERE id = #{id} AND ref_count = 0")
